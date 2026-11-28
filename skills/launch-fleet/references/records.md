@@ -1,6 +1,46 @@
 # Records and private routing
 
-Read this when changing private routing or running the check's other commands. SKILL.md's "Records" table holds every record form. `scripts/post.py` writes every record and refuses private identities.
+Read this when changing private routing or running the check's other commands. This file's "Records" table holds every record form. `scripts/post.py` writes every record and refuses private identities.
+
+## Records
+
+The loop's memory: comments on GitHub, each starting `launch-fleet:`. Edit a claim as its start moves on; a retry is a new comment.
+
+| On | Record | Means |
+| --- | --- | --- |
+| A ticket | `launch-fleet: starting` | A start is claimed |
+| | `launch-fleet: started` | Its builder started |
+| | `launch-fleet: builder fallback due, branch <branch>` | The single builder fallback is reserved |
+| | `launch-fleet: start checked, branch <branch>` | Thread, ticket and branch checked |
+| | `launch-fleet: start refused: <reason>` / `start not tried: <why>` / `start failed: <why>` / `start withdrawn` | No builder: it stays on the frontier (a refused or untried start after 10 minutes) |
+| | `launch-fleet: held for ordering: issue #B merges to main` / `held for ordering: PR #P merges to main` | An owned ordering-only hold, after its label change |
+| | `launch-fleet: held manual: <why>` / `held live: <why>` | A manual/live gate, even while already labelled held; its owner supplies separate release evidence |
+| | `launch-fleet: release starting <hold comment id>` / `released ordering C` / `release failed C: <why>` / `release withdrawn C` | A release intent and its verified outcome; unresolved intents block starts |
+| | `launch-fleet: held for #<P>` / `noted #<P>` | An existing contract hold, or a builder told of a change |
+| | `launch-fleet: asked the orchestrator` | Its `needs-info` question was passed on |
+| | `launch-fleet: granted <kind>: <reason>` / `granted spec change on #<S>: <reason>` | The fleet granted itself one of F4's four kinds; it answers the question |
+| | `launch-fleet: told the user` | A person's ticket is ready, and the user knows |
+| | `launch-fleet: complete: <evidence>` | The orchestrator or owning fleet thread records a person's completed work and names its evidence; with the ticket closed, its dependents may start |
+| | `launch-fleet: waiting for #<B>` / `resume starting <wait comment id> for #<B>` / `resume sent <wait comment id> for #<B>` / `resume failed <wait comment id> for #<B>: <why>` / `resume withdrawn <wait comment id> for #<B>` | The builder waits for a verified merge, or was told to resume that wait |
+| | `launch-fleet: archived` | Its builder and reviewer are archived |
+| | `launch-fleet: old builder archived, start <start comment id>` | The orchestrator archived that builder, from before the spec's fleet thread, so the fleet thread may start its own (a takeover) |
+| A pull request | `launch-fleet: review starting <commit>` / `review started <commit>` / `review refused <commit>: <reason>` / `review failed <commit>: <why>` / `review withdrawn <commit>` | Its reviewer for that commit |
+| | `launch-fleet: re-check sent <commit>` | The same reviewer asked to re-check |
+| | `launch-fleet: review told again <commit>` / `review given up <commit>: <why>` | A quiet reviewer was told again, or given up on (its thread archived) |
+| | `launch-fleet: CI failure sent <commit>` / `findings sent <commit>` | The builder was told |
+| | `launch-fleet: merge queued <commit>: <what allowed it>` | It waits in the merge queue at that commit |
+| | `launch-fleet: re-test starting <commit>` / `re-test sent <commit> on <base> in run <run id>: <what main changed>` / `re-test failed <commit>: <why>` | Its CI was started again at that head, and the `main` it tested (the re-test guard) |
+| | `launch-fleet: merge main asked <commit>` | Its builder was told to merge `main` in, as its re-test ran on an old `main` |
+| | `launch-fleet: merge dropped <commit>: <reason> at <time>` | The merge queue dropped it at that head, for GitHub's reason; one automatic re-queue per head once the cause is gone, claimed first by `launch-fleet: merge re-queue claimed <commit>: <reason> at <time>` (the earliest claim counts, and a claimed re-queue is never tried again) |
+| | `launch-fleet: merge blocked <commit>: <why>` | The merge waits for someone |
+| A spec | `launch-fleet: needs approval: <what changed>` / `spec summary` | The user was asked, or told it is done |
+| | `launch-fleet: spec changed for #<N>: <reason>` | A truly necessary spec change the fleet granted itself for that ticket |
+| | `launch-fleet: late look asked #<P> at <commit>` | The evidence ask: the final merge of a user-visible spec waits for the owner's late look at that head ([references/reviews.md](reviews.md), "The late look") |
+| | `launch-fleet: fleet active, loop fleet-<S>` | The spec's loop's public handle (the real loop id stays under `S` in the private loop file). The latest counts. A separate `Wake mode: fresh` line keeps existing assignments across wakes |
+| | `launch-fleet: look: live check not recorded as passed` / `live check passed` | Evidence is missing (one alert), or a newer explicit pass has been verified and the wait is released; the pass line may append `: <evidence source>` |
+| | `launch-fleet: look: live check evidence to verify in comment <id>` | The tick inspected that new evidence comment without establishing the required pass; do not repeat its verification task |
+| A run's commit | `launch-fleet: nightly telling <run> attempt <attempt>` / `nightly told <run> attempt <attempt>` / `nightly uncertain <run> attempt <attempt>` | Notification claimed, delivered, or settled after one uncertainty notice |
+| Any of them | `launch-fleet: look: <the line's reason>` | Someone was asked to look |
 
 ## Public records and private routing
 

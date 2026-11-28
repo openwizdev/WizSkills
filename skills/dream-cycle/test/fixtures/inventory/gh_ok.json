@@ -1,0 +1,15 @@
+{
+  "pulls": [
+    {"number": 7, "title": "Old PR", "updated_at": "2020-02-01T00:00:00Z", "head": {"ref": "active-pr", "repo": {"full_name": "example/alpha"}}},
+    {"number": 8, "title": "Fresh PR", "updated_at": "NOW", "head": {"ref": "fresh-pr", "repo": {"full_name": "example/alpha"}}}
+  ],
+  "milestones": [
+    {"number": 1, "title": "0.1.0", "open_issues": 0, "closed_issues": 3, "state": "open"},
+    {"number": 2, "title": "0.2.0", "open_issues": 4, "closed_issues": 0, "state": "open"}
+  ],
+  "issues": [
+    {"number": 12, "title": "Idle issue", "updated_at": "2020-02-01T00:00:00Z"},
+    {"number": 13, "title": "Fresh issue", "updated_at": "NOW"},
+    {"number": 7, "title": "Old PR", "updated_at": "2020-02-01T00:00:00Z", "pull_request": {"url": "synthetic"}}
+  ]
+}

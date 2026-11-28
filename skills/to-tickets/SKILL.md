@@ -1,6 +1,6 @@
 ---
 name: to-tickets
-description: Turn a spec into sized tickets and approve the plan by its own checks (links, relies, sizes, width, owned paths), recording a machine plan approval. Use when to-spec hands over a spec, or to re-cut a changed plan. Send unconfirmed grills to grill.
+description: Split a spec into sized tickets and check the plan. Use when to-spec hands over a spec or when an existing ticket plan needs revision.
 version: 0.4.0
 ---
 
@@ -14,11 +14,19 @@ describes when this road applies.
 
 ## 1. Check the starting point
 
-Read the project's tracker, domain, label and fleet settings in `docs/agents/`.
-You need the spec and its grill confirmation's private-comment URL; read that
-comment back privately. No confirmed grill: stop and use [grill](../grill/SKILL.md).
-If the plan was already approved, [hold before editing](changes.md). Existing
-contract holds keep their recorded release conditions.
+Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
+once per session (and again only when a blob its header lists changes). It prints
+the public-writes card, the planner's fleet sections, the tracker's
+where-things-live and repositories, the triage labels table, the private storage
+rules, the roads page and the glossary's term index. Read a term's definition in
+`GLOSSARY.md` only when you use it, and an ADR only when it touches the area.
+The card's decision-record forms replace reading the open-development contract
+for public decision records; read the full contract only for release, publishing,
+importer and ticket-mover work. You need the spec and its grill confirmation's
+private-comment URL; read that comment back privately. No confirmed grill: stop
+and use [grill](../grill/SKILL.md). If the plan was already approved,
+[hold before editing](changes.md). Existing contract holds keep their recorded
+release conditions.
 
 Keep exact owner replies and private sources private. Verify tracker and private
 repository before writing. A failed read or unknown state stops the write or
@@ -32,19 +40,21 @@ that range is `Size: S.` (this revises openwizdev/OpenWiz#2484's RR2, which set
 about 400). An M is about 400. Size M is allowed only with a
 `Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
 never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
-refuses an L, and an M without that line. Cut for the shortest critical chain,
-then the widest graph (F6): disjoint
-owned paths and only the arrows a ticket truly needs. To choose between two
-cuts, write each as picture data and run
+refuses an L, and an M without that line. Cut flat (F6): the shortest critical
+chain, then the widest graph; disjoint owned paths; only the arrows a ticket
+truly needs. A ticket that needs only another's interface waits on a
+contract-first ticket; ordering never justifies an arrow. Step 4 needs a spec
+`Why deep:` line for a chain over 5, or over 3 and over 2/3 of the open tickets.
+Compare cuts as picture data with
 `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps
-the shorter critical chain, and the wider graph when the chains are equal.
-Use a contract-first ticket for a shared interface, or say why none is needed.
-Ask yourself the owner's old questions: is each ticket the right size, is each
-arrow right, what should merge or split. The checks in
-step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
+the shorter chain, then the wider graph. Ask of each ticket: right size, merge
+or split? See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 
+Before you create or show the tickets, run the
+[fidelity pass](../to-spec/fidelity.md) on the whole drafted set: drop or fix
+each item, or keep it and tell the user why in one line.
 Create each issue without a ready label, blockers first, in the spec's
 milestone, with its native parent and blockers. Read back every issue: title,
 body, parent, milestone, labels and blockers. Draw the read-back graph with

@@ -551,6 +551,7 @@ def graphql(w, repo, o, ids, page, answer):
                             'conclusion': get(c, 'conclusion'),
                             'databaseId': alt(get(c, 'databaseId'), 100 + i if isinstance(i, int) else fail('the world is not valid')),
                             'startedAt': get(c, 'startedAt'),
+                            'completedAt': get(c, 'completedAt'),
                             # K9 (#337): the check's workflow run, "run" its createdAt and "runId" its databaseId.
                             'checkSuite': {'workflowRun': None if get(c, 'run') is None else
                                            {'createdAt': get(c, 'run'), 'databaseId': get(c, 'runId')}}})
@@ -1024,6 +1025,17 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
         elif lbl.endswith('%22'):
             lbl = lbl[:-len('%22')]
         cap = argjson(env.get('FAKE_GH_SEARCH_CAP') or '1000')
+        if 'in%3Atitle' in encoded:
+            if encoded != quote('repo:%s is:issue is:open in:title "Main is red"' % repo, safe='-_.~'):
+                fail('unexpected search: ' + encoded)
+            if truthy(w.get('searchIncomplete')):
+                out.append(compact({'total_count': 1, 'incomplete_results': True, 'items': []}) + '\n')
+                return 0
+            found = [i for i in issues() if get(i, 'state') == 'OPEN' and 'Main is red' in alt(get(i, 'title'), '')]
+            out.append(compact({'total_count': len(found), 'incomplete_results': False,
+                                'items': [{'number': get(i, 'number'), 'title': get(i, 'title'), 'state': 'open'}
+                                          for i in found[:cap]]}) + '\n')
+            return 0
         # F6's open-work search (#1353) has no `no:parent-issue` and asks `is:open`.
         whole = 'no%3Aparent-issue' not in encoded
         # #1750: the start's open-work read also finds launch-fleet records
@@ -1132,6 +1144,9 @@ def rest_read(w, repo, path, page, paginate, include, accept, answer, out):
             else:
                 state = 'success'
             out.append(compact({'state': state, 'sha': sha, 'statuses': statuses}) + '\n')
+        elif sha == w.get('default'):
+            runs = each_opt(w.get('baseChecks'))
+            out.append(compact({'total_count': len(runs), 'check_runs': runs}) + '\n')
         else:
             runs = [c for c in cs if get(c, 'type') != 'StatusContext']
             out.append(compact({'total_count': len(runs), 'check_runs': runs}) + '\n')

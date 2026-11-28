@@ -1,0 +1,29 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18008": "example-org/example-repo#82"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issue_comment",
+        "X-GitHub-Delivery": "example-issue-comment-created-on-ticket"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18008
+        },
+        "action": "created"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 82"
+        ]
+      }
+    }
+  ]
+}

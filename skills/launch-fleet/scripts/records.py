@@ -65,10 +65,18 @@ def discover():
         return None
 
 
-def choose(key, matches, state, threads):
+def unreachable(repo):
+    if os.environ.get('LAUNCH_FLEET_STATE'):
+        return 'thread discovery is out of reach'
+    name = repo if isinstance(repo, str) and repo else '<owner/name>'
+    empty = json.dumps({'repo': name, 'threads': {}})
+    return 'private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with ' + empty
+
+
+def choose(key, matches, state, threads, repo=None):
     saved = state.get(key)
     if threads is None:
-        return (saved, None) if saved else (None, 'thread discovery is out of reach')
+        return (saved, None) if saved else (None, unreachable(repo))
     if len(matches) > 1:
         return None, 'two threads match ' + key
     found = matches[0]['id'] if matches else None
@@ -98,7 +106,7 @@ def driver_runs(repo):
         return UNREADABLE
 
 
-def builder_thread(n, branch, threads, state, runs=None):
+def builder_thread(n, branch, threads, state, runs=None, repo=None):
     if runs is UNREADABLE:
         return None, 'the private runs file is unreadable'
     if runs is MISSING:
@@ -111,7 +119,7 @@ def builder_thread(n, branch, threads, state, runs=None):
     matches = [t for t in threads or [] if isinstance(t.get('title'), str)
                and t['title'].startswith(f'#{n}: ')
                and (branch is None or t.get('branch') == branch)]
-    found, error = choose(f'builder:{n}', matches, state, threads)
+    found, error = choose(f'builder:{n}', matches, state, threads, repo)
     if runs is UNSET and error == f'no thread matches builder:{n}':
         error += ', and no private run map LAUNCH_FLEET_RUNS was restored'
     return found, error
@@ -136,7 +144,7 @@ def review_keys(state):
     return keys
 
 
-def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None):
+def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None, repo=None):
     key = key or str(n)
     saved = state.get(f'review:{key}:claim:{claim}')
     if saved:
@@ -145,7 +153,7 @@ def reviewer_thread(n, commit, threads, state, claim=None, retired=(), key=None)
     pull = f'(?i:{re.escape(key)})' if '#' in key else f'#{n}'
     pattern = re.compile(rf'Review {pull} at ([0-9a-f]{{1,40}})')
     matches = [t for t in threads or [] if (m := pattern.fullmatch(t.get('title') or '')) and commit.startswith(m[1])]
-    return choose(f'review:{key}:{commit}', matches, state, threads)
+    return choose(f'review:{key}:{commit}', matches, state, threads, repo)
 
 
 def reviewer_run(n, runs):
@@ -186,7 +194,7 @@ def annotate(world, repo, private, threads, state):
                     line = line.replace('review failed ', 'review given up ', 1)
             branch = re.fullmatch(r'start checked, branch ([A-Za-z0-9._/-]+)', line)
             if not legacy and (line == 'started' or branch):
-                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs)
+                c['resolvedThread'], c['recordError'] = builder_thread(obj['number'], branch[1] if branch else None, threads, state, runs, repo)
             review = re.fullmatch(rf'(review started|re-check sent|review told again|review given up) ({SHA})(?:: .+)?', line)
             if review:
                 kind, commit = review.groups()
@@ -209,7 +217,7 @@ def annotate(world, repo, private, threads, state):
                     if driver_review:
                         identity = None
                     elif identity is None:
-                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired, key)
+                        identity, _ = reviewer_thread(obj['number'], start or commit, threads, routes, start_claim, retired, key, repo)
                     c['archiveThread'] = identity
                     if identity:
                         retired.add(identity)
@@ -226,7 +234,7 @@ def annotate(world, repo, private, threads, state):
                 elif driver_review and not legacy and not any(record.get('givenUp') for record in span):
                     c['resolvedThread'], c['recordError'] = reviewer_run(obj['number'], runs)
                 elif not legacy and not driver_review:
-                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key)
+                    c['resolvedThread'], c['recordError'] = reviewer_thread(obj['number'], start, threads, routes, start_claim, retired, key, repo)
                 if c.get('resolvedThread') in retired:
                     c['recordError'] = 'reviewer was already given up on this pull request'
                 if any(record.get('givenUp') for record in span):
@@ -355,8 +363,24 @@ def main():
                 return True
             return any(needed(v) for v in x.values())
         return isinstance(x, list) and any(needed(v) for v in x)
+    empty = json.dumps({'repo': repo, 'threads': {}})
     try:
         state = private_state(repo)
+    except FileNotFoundError:
+        print(f'records: private thread map LAUNCH_FLEET_STATE is missing; create it with {empty}', file=sys.stderr)
+        return 2
+    except ValueError as error:
+        if str(error) == 'private state needs an absolute path':
+            print(f'records: LAUNCH_FLEET_STATE needs an absolute path; create it outside the checkout with {empty}',
+                  file=sys.stderr)
+        else:
+            print(f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {empty}',
+                  file=sys.stderr)
+        return 2
+    except (OSError, KeyError, TypeError):
+        print(f'records: private thread map LAUNCH_FLEET_STATE could not be read; expected {empty}', file=sys.stderr)
+        return 2
+    try:
         threads = discover() if os.environ.get('LAUNCH_FLEET_GITHUB_ONLY') != '1' and needed(world) else None
         json.dump(annotate(world, repo, private == 'true', threads, state), sys.stdout)
     except (OSError, ValueError, KeyError, TypeError):

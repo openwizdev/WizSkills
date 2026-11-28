@@ -24,21 +24,32 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each carried skill's own suites, run from the tree's root. The inventory
 # guard below refuses any newly added suite until this list includes it.
 SUITES = {
-    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py']],
+    'build-ticket': [['python3', '-I', 'skills/build-ticket/scripts/test_ticket.py'],
+                     ['python3', '-I', 'skills/build-ticket/scripts/test_prove.py'],
+                     ['python3', '-I', 'skills/build-ticket/scripts/test_complete.py']],
     'triage': [['python3', '-I', 'skills/triage/test/test_find_work.py'],
                ['python3', '-I', 'skills/triage/test/test_public_records.py']],
     'feedback': [['python3', '-I', 'skills/feedback/test/test_feedback.py']],
+    'ghost': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/ghost/tests']],
     'install': [['python3', '-I', 'skills/install/tests/test_first_fleet.py'],
                 ['python3', '-I', 'skills/install/tests/test_doctor.py'],
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
-              ['python3', 'skills/grill/scripts/test_records.py']],
+              ['python3', '-I', 'skills/grill/scripts/test_records.py']],
+    'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],
     'diagnose': [['node', '--test', 'skills/diagnose/tests/hitl-loop.test.mjs'],
                  ['python3', '-I', 'skills/diagnose/scripts/test_loop.py']],
+    'dream-cycle': [['python3', '-I', 'skills/dream-cycle/test/test_contract.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_inventory.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_dream.py'],
+                    ['python3', '-I', 'skills/dream-cycle/test/test_links.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
-    'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
+    'agent-issue': [['python3', '-I', 'skills/agent-issue/test/test_lint.py']],
+    'agent-pr': [['python3', '-I', 'skills/agent-pr/test/test_pr.py']],
+    'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py'],
+                ['python3', '-I', 'skills/ask-wiz/test/persona/test_cases.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'setup': [['python3', '-I', 'skills/setup/scripts/test_settings.py']],
     'image': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/image/tests'],
@@ -64,6 +75,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-inbox.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-records.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-status.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-context.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ops-starts.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-on1.py'],
                      ['sh', 'skills/launch-fleet/scripts/test-loop.sh'],
@@ -80,6 +92,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-overload.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-gitread.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ghcache.py'],
@@ -91,7 +104,14 @@ SUITES = {
               ['python3', '-I', 'check/test_suites.py'],
               ['python3', '-I', 'check/test_bench.py'],
               ['python3', '-I', 'check/test_select.py'],
-              ['python3', '-I', 'check/test_checklist_rules.py']],
+              ['python3', '-I', 'check/test_checklist_rules.py'],
+              ['python3', '-I', 'check/test_context_budget.py'],
+              ['python3', '-I', 'check/test_packaged_imports.py'],
+              ['python3', '-I', 'check/test_packaged_scripts.py'],
+              ['python3', '-I', 'check/test_checkpoints_authority.py']],
+    'tools': [['python3', '-I', 'tools/review-rounds/test_bench.py'],
+              ['python3', '-I', 'tools/comment-check/test_ci.py'],
+              ['python3', '-I', 'tools/comment-check/test_commands.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -108,11 +128,18 @@ def rows():
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'agent-issue': ORIGINAL,
+    'agent-pr': ORIGINAL,
+    'dream-cycle': ORIGINAL,
+    'role-call': ORIGINAL,
     'feedback': ORIGINAL,
+    'ghost': ORIGINAL,
     'hill-climb': ORIGINAL,
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'jev': ORIGINAL,
+    'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",
 }
@@ -140,9 +167,10 @@ MATT_COPYRIGHT = 'Copyright (c) 2026 Matt Pocock'
 ASK_WIZ = 'ask-wiz'
 ASK_WIZ_POLICY = 'policy:\n  allow_implicit_invocation: false'
 FRONTMATTER_KEYS = ('name', 'description', 'version')
-DESCRIPTION_MAX = 1024
+DESCRIPTION_MAX = 180
 OPENAI_KEYS = ('display_name', 'short_description')
 
+HOST_SKILLS = ('.agents/skills', '.claude/skills')
 PLUGIN = '.claude-plugin/plugin.json'
 MARKETPLACE = '.claude-plugin/marketplace.json'
 PLUGIN_KEYS = {'name', 'version', 'description', 'author', 'homepage', 'repository',
@@ -176,6 +204,7 @@ def rules(root):
     for name in names:
         skill(root, name, out)
     links(root, out)
+    host_links(root, names, out)
     plugin_version = plugin(root, names, out)
     marketplace(root, plugin_version, out)
     return out
@@ -406,6 +435,37 @@ def links(root, out):
         dirs[:] = [d for d in dirs if not (here / d).is_symlink()]
 
 
+def host_links(root, names, out):
+    expected = set(names)
+    for rel in HOST_SKILLS:
+        folder = root / rel
+        if folder.parent.is_symlink() or folder.is_symlink() or not folder.is_dir():
+            out.add('links', rel, 'the host skills folder is missing')
+            continue
+        try:
+            with os.scandir(folder) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError:
+            out.add('links', rel, 'the host skills folder is unreadable')
+            continue
+        seen = set()
+        for entry in entries:
+            at = f'{rel}/{entry.name}'
+            seen.add(entry.name)
+            if entry.name not in expected:
+                out.add('links', at, f'`{entry.name}` is not a carried skill folder')
+                continue
+            target = f'../../skills/{entry.name}'
+            try:
+                actual = os.readlink(entry.path) if entry.is_symlink() else None
+            except OSError:
+                actual = None
+            if actual != target:
+                out.add('links', at, f'symlink must point to `{target}`')
+        for name in sorted(expected - seen):
+            out.add('links', f'{rel}/{name}', f'missing symlink to `../../skills/{name}`')
+
+
 def markdown(path, at, real_root, out):
     text = read(path)
     if text is None:
@@ -542,6 +602,7 @@ def marketplace(root, version, out):
         out.add('manifest', MARKETPLACE, '`plugins[0].source` is `./`, the repository root')
     if 'version' in entry and entry['version'] != version:
         out.add('manifest', MARKETPLACE, f'`plugins[0].version` agrees with {PLUGIN}')
+    return data
 
 
 # ---- The standalone check and the suites ----
@@ -630,11 +691,18 @@ def unlisted_tests(root):
                 covered.add(rel)
     # Huntr's public shell entrypoint executes its four Node test modules.
     covered.update('skills/huntr/scripts/' + name for name in
-                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs'))
-    discovered = {p.relative_to(root).as_posix() for p in (root / 'skills').rglob('*')
-                  if p.is_file() and 'fixtures' not in p.parts and
-                  ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
-                   or p.name.endswith('.test.mjs'))}
+                   ('gate.test.mjs', 'manifest.test.mjs', 'records.test.mjs', 'controller.test.mjs',
+                    'targets.test.mjs', 'findings.test.mjs'))
+    discovered = set()
+    for folder in ('skills', 'tools'):
+        base = root / folder
+        if base.is_dir():
+            discovered.update(
+                p.relative_to(root).as_posix() for p in base.rglob('*')
+                if p.is_file() and 'fixtures' not in p.relative_to(root).parts and
+                ((p.name.startswith('test') and p.suffix in ('.py', '.sh'))
+                 or p.name.endswith('.test.mjs'))
+            )
     discovered.update(p.relative_to(root).as_posix() for p in (root / 'check').glob('test*.py'))
     return sorted(discovered - covered)
 

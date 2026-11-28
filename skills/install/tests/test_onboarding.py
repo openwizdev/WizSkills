@@ -282,6 +282,11 @@ class Conversation(unittest.TestCase):
                 self.assertEqual([t['agent'] for t in said[:3]], lines['Up front'])
         self.assertTrue(any(t.get('say') == 'missing' for j in ROAD['journeys'] for t in j['turns']))
 
+    def test_teach_has_plain_words_section_with_help_line(self):
+        self.assertIn('\n## Plain words\n', TEACH)
+        plain = TEACH.split('\n## Plain words\n', 1)[1].split('\n## ', 1)[0]
+        self.assertIn("Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/", plain)
+
     def test_after_the_grills_yes_only_the_gates_and_the_mode_ask_until_the_closing_offer(self):
         for journey in ROAD['journeys']:
             with self.subTest(journey['name']):
@@ -920,13 +925,26 @@ class ReviewRound(unittest.TestCase):
     def road(self, name='always-wanted'):
         return Road(self, next(j for j in ROAD['journeys'] if j['name'] == name))
 
-    def test_r1_the_road_never_runs_a_sign_in_itself(self):
+    def test_r1_the_road_starts_sign_in_only_after_a_clear_yes_and_never_reads_a_token(self):
         text = (SKILL_DIR / 'SKILL.md').read_text()
+        guards = text[text.index('## Guards'):text.index('## Where your agents run')]
+        yes_prompt = ("I'll open GitHub's sign-in page and give you a short code; "
+                      "you type your password only on GitHub's own page. OK?")
+        self.assertIn('Never touch a login without a clear yes, and never see it.', guards)
+        self.assertIn(yes_prompt, guards)
+        self.assertLess(guards.index(yes_prompt), guards.index('github_login.py sign-in --state-dir <state> --yes'))
+        for words in ('in the background', 'https://github.com/login/device', 'never read, pass or store a token',
+                      'cloudroom.py sign-in'):
+            self.assertIn(words, guards)
         lines = [line for line in text.splitlines() if 'github_login.py sign-in' in line or 'auth login' in line]
         self.assertTrue(lines)
         for line in lines:
-            self.assertRegex(line, r'\b(themselves|yourself)\b', line)
+            self.assertRegex(line, r'clear yes|without.*yes', line)
+            self.assertIn('in the background', line)
         self.assertIn('github_login.py status', text, "the agent's own step is the read-only check")
+        self.assertIn('https://github.com/signup', text)
+        self.assertIn("I'll add the setup to your project now. OK?", text)
+        self.assertIn('gh pr merge <number> --merge', text)
         road = self.road('fresh-project')
         road.change({'world': 'signed_out'})
         result = road.helper(['where', '--agents', 'cloud', '--yes'])
@@ -1237,8 +1255,8 @@ class ExpressFirstFleet(unittest.TestCase):
                                     r'[^.]*all three build in parallel')
             self.assertNotRegex(grill, r'(?i)\btwo rounds\b|\b4 to 7\b')
             start = teach_lines()['The grill'][0]
-            self.assertRegex(start, r'\bone round\b')
-            self.assertRegex(start, r'\babout three\b')
+            self.assertRegex(start, r'\bfew quick questions\b')
+            self.assertRegex(start, r'\bfirst version is small enough to build quickly\b')
         with self.subTest('6.7 Plan'):
             plan = self.section(skill, '### 7. Plan')
             self.assertRegex(plan, r"install's first fleet[^.]*straight to the launch with no video")
@@ -1249,7 +1267,7 @@ class ExpressFirstFleet(unittest.TestCase):
             spec = teach_lines()['The spec and its video']
             self.assertEqual(len(spec), 1)
             self.assertNotIn('<video link>', spec[0])
-            self.assertRegex(spec[0], r'first fleet has no video')
+            self.assertNotRegex(spec[0], r'(?i)\bvideo\b')
             self.assertNotRegex(spec[0], r'(?i)starts as soon as|nothing for you to do')
             self.assertRegex(spec[0], r'ask for your yes')
         with self.subTest('to-spec step 4'):
@@ -1260,6 +1278,38 @@ class ExpressFirstFleet(unittest.TestCase):
             self.assertRegex(first, r'reset or change of that spec or plan[^.]*new machine approval[^.]*no video'
                                     r"[^.]*step 5's new video")
             self.assertRegex(first, r'Every other spec gets its video\.$')
+
+
+class WatchPagesOffer(unittest.TestCase):
+
+    def section(self, text, heading):
+        return text.split(heading + '\n', 1)[1].split('\n#', 1)[0]
+
+    def test_watch_offers_github_pages_between_merged_and_closing_offer(self):
+        watch = self.section((SKILL_DIR / 'SKILL.md').read_text(), '### 9. Watch')
+        offer = '"I can put it online for free with GitHub Pages, so you get a link you can open on your phone. Shall I?"'
+        enable = ("`gh api -X POST repos/<owner>/<name>/pages -f 'source[branch]=<default branch>' "
+                  "-f 'source[path]=</ or /docs>'`")
+        readback = '`gh api repos/<owner>/<name>/pages --jq .html_url`'
+        live = ('"It\'s online: <link>. Open it on your phone; it updates by itself each time the helpers '
+                'add a change."')
+        private_line = "A private repository on a free GitHub plan can't use Pages:"
+
+        for snippet in (offer, '`index.html`', '`docs/`', enable, 'an existing Pages site is read, not changed',
+                        readback, '20 seconds', '5 minutes', live, private_line,
+                        'offer nothing that costs money', 'help line from [teach.md](teach.md)',
+                        'No yes, nothing changes.', 'not a gate for the merge or the closing offer'):
+            self.assertIn(snippet, watch)
+
+        merged_at = watch.index('**Merged**')
+        offer_at = watch.index(offer)
+        readback_at = watch.index(readback)
+        private_at = watch.index(private_line)
+        closing_at = watch.index('**The closing offer**')
+        self.assertLess(merged_at, offer_at)
+        self.assertLess(offer_at, readback_at)
+        self.assertLess(readback_at, private_at)
+        self.assertLess(private_at, closing_at)
 
 
 if __name__ == '__main__':

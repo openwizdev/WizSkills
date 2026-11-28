@@ -48,7 +48,7 @@ if mode == 'symlink':
 suffix = '.bin' if mode == 'wrong-extension' else '.wav'
 w = wave.open(sys.argv[1] + suffix, 'wb')
 w.setparams((1, 2, 16000, 0, 'NONE', ''))
-amp = 0 if mode.startswith('silent') else 8000
+amp = 0 if mode.startswith('silent') else int(os.environ.get('VOICE_AMP', '8000'))
 tones = json.loads(os.environ.get('VOICE_TONES', '{}'))
 hz, sample_count = tones.get(text, (320, 8000))
 w.writeframes(b''.join(int(amp * math.sin(math.tau * hz * i / 16000)).to_bytes(2, 'little', signed=True)
@@ -223,6 +223,24 @@ class SpecVideo(unittest.TestCase):
             start += length
 
     @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
+    def test_narration_is_normalized_to_minus_16_lufs_however_loud_the_voice(self):
+        for name, amp in (('quiet', 250), ('loud', 30000)):
+            with self.subTest(voice=name):
+                out = self.tmp / f'{name}.mp4'
+                env = dict(os.environ, VOICE_AMP=str(amp))
+                result = run('build', self.write(self.moments), '-o', out, '--tts-command', self.voice_command(),
+                             cwd=Path.cwd(), env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                measured = subprocess.run(['ffmpeg', '-hide_banner', '-nostats', '-i', str(out), '-af',
+                                           'loudnorm=I=-16:TP=-1.5:print_format=json', '-vn', '-f', 'null', '-'],
+                                          capture_output=True, text=True).stderr
+                loud = json.loads(measured[measured.rindex('{'):measured.rindex('}') + 1])
+                self.assertGreaterEqual(float(loud['input_i']), -17.5, f'the {name} voice stays quiet: {loud["input_i"]} LUFS')
+                self.assertLessEqual(float(loud['input_i']), -14.5, f'the {name} voice is too loud: {loud["input_i"]} LUFS')
+                self.assertLessEqual(float(loud['input_tp']), -1.0, f'the {name} voice clips: {loud["input_tp"]} dBTP')
+                self.assertIn('LUFS', result.stdout)
+
+    @unittest.skipUnless(can_render(), 'rendering needs ffmpeg, ffprobe, Chromium and playwright-core')
     def test_rebuilding_a_shorter_storyboard_uses_only_its_own_frames_in_the_sheet(self):
         extra = copy.deepcopy(self.moments[-1])
         extra['frame']['headline'] = 'A frame from the longer storyboard'
@@ -233,7 +251,7 @@ class SpecVideo(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         last_tile = subprocess.check_output([
             'ffmpeg', '-v', 'error', '-i', str(self.tmp / 'build/sheet.png'),
-            '-vf', 'crop=iw/3:ih/2:iw*2/3:ih/2,scale=1:1', '-pix_fmt', 'rgb24',
+            '-vf', 'crop=iw/3:ih/2:iw*2/3:ih/2,scale=1:1:flags=bilinear', '-pix_fmt', 'rgb24',
             '-frames:v', '1', '-f', 'rawvideo', '-'])
         self.assertEqual(last_tile, bytes(3), 'the sixth tile still shows an earlier frame')
 

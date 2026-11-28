@@ -1,6 +1,6 @@
 ---
 name: ask-wiz
-description: Recommend the skill or flow for the user's question, including OpenWiz, installed and discoverable skills. User-started only; agents may suggest ask-wiz when the user seems confused, but never run it in their own workflows.
+description: Recommend the next skill or workflow. Use when the user starts Ask Wiz to ask what skill to use or what to do next.
 disable-model-invocation: true
 version: 0.2.2
 ---
@@ -18,7 +18,7 @@ The user asks "what skill should I use?" and gets one next step that fits their 
 ## Recommend
 
 1. Find the outcome the user wants from their question and context. If a missing decision changes the answer, ask one plain question.
-2. Take candidates from the catalog below and the skills actually installed in this session (its real catalog, not a guess). Read a candidate's SKILL.md before recommending it or saying a step can be skipped. OpenWiz skills sit beside this skill's folder (`../<name>/SKILL.md`), not in the project's working directory; read other skills through their catalog paths. An unreadable candidate is unverified: find a readable one.
+2. Take candidates from the catalog below and the skills installed in this session (real catalog, not a guess). Read a candidate's SKILL.md before recommending it or saying a step can be skipped. OpenWiz skills sit beside this folder (`../<name>/SKILL.md`), not in the working directory; read others via their catalog paths. An unreadable candidate is unverified: find a readable one.
 3. Recommend the best fit: its name, why it fits, where it enters the flow, and the exact words to start it (for example, "Read the grill skill and grill this idea"). The chosen skill's own text decides its prerequisites, role and gates.
 4. Wait for the yes, then read and follow the chosen skill.
 
@@ -31,16 +31,21 @@ Done when the user has one named recommendation with its start words, and nothin
 | Skill | Use it to |
 | --- | --- |
 | `grill` | Settle a design with the user, ending in a confirmed summary |
+| `role-call` | Record who replies present before a grill |
 | `to-spec` | Turn a confirmed grill into a spec and its narrated video |
 | `to-tickets` | Turn a confirmed spec into tickets and their blocking edges |
 | `launch-fleet` | Run an approved plan through its fleet and merge rules, between sessions too |
 | `build-ticket` | Build one ticket as its builder, proof first, inside its owned paths |
 | `review-ticket` | Check a green pull request's exact head as the independent reviewer |
+| `agent-issue` | File one machine-readable issue any repository's agents can execute |
+| `agent-pr` | Open that issue's one pull request, with proof and a review of its exact head |
 | `where-are-we` | Read the current status and get one next move, at any point |
 | `triage` | Sort incoming bugs and ideas; approved work enters the fleet |
 | `diagnose` | Find a hard bug's cause from a tight failing loop, in the caller's scope |
+| `jev` | Use Jev for typed judgments |
 | `feedback` | Report an OpenWiz problem as one public issue, after its exact preview and your yes |
 | `huntr` | Find and prove small unplanned work under its configured approval gate |
+| `son-of-anton` | Attack your own factory on a schedule through `huntr`'s attack mode and file what is proven |
 | `wayfind` | Map an effort too big or unclear for one grill, then hand it to `to-spec` |
 | `hill-climb` | Improve an outcome through judged candidates and human checkpoints |
 | `image` | Make a picture, a UI target or evidence from a real page |
@@ -49,12 +54,15 @@ Done when the user has one named recommendation with its start words, and nothin
 | `setup` | Configure a project's issue tracker, labels and fleet settings |
 | `handoff` | Give a fresh orchestrator the project's durable state |
 | `write-driver` | Write and prove an OpenWiz driver for your own host, from one pasted line |
+| `dream-cycle` | Run an organization-wide read-only review into a private report and confirmed tickets |
+| `ghost` | Set up ghost text and keep a phrase change only when the bench does not drop |
 | `ask-wiz` | Choose a skill or flow when unsure, started by the user |
+| `wait-what` | Re-pitch the last message when you are lost |
 
-At a phase boundary (a design settled, a plan written, a ticket built, a result checked), read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
+At a phase boundary, read [the CloudRoom thread guide](PHASE-BOUNDARIES.md) to choose whether to keep going, start a fresh thread from a handoff, or send a bounded task to a child thread.
 
 ## When no skill fits
 
-Read [the external search](EXTERNAL.md) and follow it: trusted sources first, then skills.sh and GitHub, the top three candidates compared, each read and risk-checked before you recommend it. Using a found skill and keeping it are separate: install one only on the user's own yes to installation.
+Read [the external search](EXTERNAL.md) and follow it. Install a found skill only on the user's own yes.
 
 Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

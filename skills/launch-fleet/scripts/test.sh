@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=978
+CASES=1095
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -89,7 +89,7 @@ done
 
 # A 40-character commit made of TEXT repeated, as the jq `sha` below makes it.
 sha() { s=''; while [ ${#s} -lt 40 ]; do s=$s$1; done; printf '%.40s' "$s"; }
-S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99)
+S31=$(sha 31) S31F=$(sha 31f) S31E=$(sha 31e) S31B=$(sha 31b) S99=$(sha 99) S32=$(sha 32) S77=$(sha 77)
 
 # Small changes to a fixture, for the cases' filters.
 LIB='
@@ -169,6 +169,21 @@ def merge12: issue(12; .state = "CLOSED") | say(12; 1202; "11:05"; "launch-fleet
 def all_closed: merge12 | issue(13; .state = "CLOSED") | issue(14; .state = "CLOSED")
   | merged_pr(24; 13; "11:10"; []) | merged_pr(25; 14; "11:20"; []);
 def pr31: open_pr(31; 12; "#12: widget store, green");
+# AD3 (#3117): the tip of the default branch, sha(77), one check run per
+# [name, conclusion]. A null conclusion is still in progress.
+def base_runs($runs): .baseChecks = [$runs | to_entries[] | {id: (700 + .key), name: .value[0],
+  status: (if .value[1] == null then "in_progress" else "completed" end), conclusion: .value[1], head_sha: sha(77),
+  html_url: "https://github.com/synthetic-owner/synthetic-repo/actions/runs/7\(.key)/job/70\(.key)"}];
+# A short synthetic builder thread, so a new line carries no private-shaped token.
+def red31: pr31 | pull(31; .rollup = "FAILURE" | .checks[1] |= (.conclusion = "FAILURE" | .completedAt = at("11:00")))
+  | (.issues[] | select(.number == 12) | .comments[].body) |= gsub("thread thr_" + "syn12"; "thread room-12");
+def main_red: base_runs([["build", "success"], ["test", "failure"]]);
+def legacy_pause31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test");
+def paused31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test; head \(sha(31))");
+def resumed31: pr_say(31; 3102; "11:20"; "launch-fleet: resumed \(sha(31)), base green \(sha(77))");
+def main_green: base_runs([["build", "success"], ["test", "success"]]);
+def fix_claim($id; $body): .commitComments += [{id: $id, commit_id: sha(77), body: $body, created_at: at("11:59")}];
+def fix_issue($n; $title): .issues += [{number: $n, title: $title, state: "OPEN", parent: null, labels: [], blockedBy: [], body: "", comments: []}];
 # #923: three configured required names; all run IDs and times are synthetic.
 def ci31: pr31
   | .files["docs/agents/fleet.md"] |= sub("\\| `test` \\| 4 \\| `main` \\|"; "| `test` | 4 | `main` |\n| `package` | 5 | `main` |")
@@ -435,7 +450,7 @@ take() {
 
 # only_reads LOG...: every gh call in these logs was one of fleet.sh's reads.
 only_reads() {
-  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
+  grep -h -v -E '^(repo view|nightly runs branch=[^ ]+|commit comments [0-9a-f]{40}|contents docs/agents/(fleet|triage-labels)\.md|graphql (Specs|Merged) cursor=[0-9a-z]+|graphql Spec number=[0-9]+( size=[0-9]+)?|graphql (Singles|Search) cursor=[0-9a-z]+|files [0-9]+|refs heads/room/[0-9]+-|graphql (Nodes|Blockers) count=[0-9]+|graphql Writer login=[a-z0-9-]+|graphql Facts count=[0-9]+|graphql Comments number=[0-9]+ before=[0-9a-zA-Z=+/_-]+|rate limit|graphql Checks oid=[0-9a-f]{40} cursor=[0-9]+|graphql Item number=[0-9]+ size=(2|5)( cursor=[0-9]+)?|issue view [0-9]+ (subIssues|body|number,title,blockedBy)|issues page=[0-9]+|search issues page=[0-9]+|issue comments [0-9]+ page=[0-9]+|detail [0-9]+|dependencies [0-9]+ page=[0-9]+|repo clone|repository|user|installation repositories|sub issues [0-9]+ page=[0-9]+|timeline [0-9]+ page=[0-9]+|(check runs|status) [0-9a-f]{40}|check runs [^ ]+|ref heads/[A-Za-z0-9._/-]+)$' "$@" 2> /dev/null \
     | sed 's/^/    /' > "$tmp/odd-calls"
   if [ -s "$tmp/odd-calls" ]; then bad 'only reads' "unexpected gh calls:"; cat "$tmp/odd-calls"; else echo "ok   every gh call was one of fleet.sh's reads"; fi
 }
@@ -824,6 +839,113 @@ expect 'CI failed: tell the builder' 0 check.json 'pr31 | pull(31; .rollup = "FA
 CI failed #31 for #12 at $S31: tell its builder, thread thr_syn12
 EOF
 expect 'a CI failure already sent is not sent again' 0 check.json 'pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | pr_say(31; 3101; "11:10"; "launch-fleet: CI failure sent \(sha(31))")' -- check < /dev/null
+RUN70=https://github.com/synthetic-owner/synthetic-repo/actions/runs/70/job/700
+RUN71=https://github.com/synthetic-owner/synthetic-repo/actions/runs/71/job/701
+expect 'base red: a check that also fails on main pauses the PR' 0 check.json 'red31 | main_red' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a wake reads main too' 0 check.json 'red31 | main_red' -- wake 31 <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a check green on main is still the builder'"'"'s' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "success"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: main still running is still the builder'"'"'s' 0 check.json 'red31 | base_runs([["build", "success"], ["test", null]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: an open fix issue is not opened again' 0 check.json 'red31 | main_red | fix_issue(90; "Main is red: test")' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
+EOF
+expect 'base red: two paused PRs ask for one fix issue' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
+EOF
+expect 'base red: a recorded pause and fix issue write nothing again' 0 check.json 'red31 | main_red | paused31 | fix_issue(90; "Main is red: test")' -- check < /dev/null
+expect 'base red: paused while main still runs, it waits' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", null]])' -- check < /dev/null
+expect 'base red: a green main resumes the paused PR' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", "success"]])' -- check <<EOF
+resume #31 for #12 at $S31: main is green again at $S77 (test); tell its builder to merge main in and re-run CI, thread room-12; record resumed $S31, base green $S77
+EOF
+expect 'base red: a resume recorded is not sent again' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", "success"]]) | pr_say(31; 3102; "11:20"; "launch-fleet: resumed \(sha(31)), base green \(sha(77))")' -- check < /dev/null
+expect 'base red: one green check on main keeps the failure with the builder' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "success"], ["test", "failure"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: cancelled on main is not a red main' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "cancelled"]])' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: an incomplete search asks for no fix issue' 0 check.json 'red31 | main_red | .searchIncomplete = true' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
+EOF
+expect 'base red: a builder-owned failure while paused is still CI failed' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | paused31 | main_red' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: both failing checks red on main names both' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "failure"], ["test", "failure"]])' -- check <<EOF
+base red #31 for #12 at $S31: build, test fail on main at $S77 too; record paused, base red $S77 build, test; head $S31, and leave its builder be; open issue "Main is red: build" labelled ready-for-agent, naming build, test and its first red run $RUN70
+EOF
+expect 'base red: timed out on main pauses the PR' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "timed_out"]])' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a check run with no id is refused' 2 check.json 'red31 | main_red | .baseChecks[1].id = "nope"' -- check <<EOF
+invalid checks on main
+EOF
+expect 'base red: a cross-repository pull request stays CI failed' 0 check.json 'red31 | main_red | pull(31; .repo = "other-owner/other-repo")' -- check <<EOF
+CI failed other-owner/other-repo#31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: retry the missing issue after a pause' 0 check.json 'red31 | main_red | paused31' -- check <<EOF
+base red #31 for #12 at $S31: pause already recorded at $S77; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a retry still refuses incomplete issue search' 0 check.json 'red31 | main_red | paused31 | .searchIncomplete = true' -- check < /dev/null
+expect 'base red: a resumed head can fail a different check' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE" | .checks[1].conclusion = "SUCCESS") | paused31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a check rerun can fail after resume' 0 check.json 'red31 | pull(31; .checks[1].completedAt = at("11:30")) | paused31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a status context can fail after resume' 0 check.json 'red31 | pull(31; .checks[1] = {type: "StatusContext", context: "test", state: "FAILURE", createdAt: at("11:30")}) | paused31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a new head on green main inherits no pause' 0 check.json 'red31 | legacy_pause31 | pull(31; .head = sha(99)) | main_green' -- check <<EOF
+CI failed #31 for #12 at $S99: tell its builder, thread room-12
+EOF
+expect 'base red: a new head on running main inherits no pause' 0 check.json 'red31 | legacy_pause31 | pull(31; .head = sha(99)) | base_runs([["build", "success"], ["test", null]])' -- check <<EOF
+CI failed #31 for #12 at $S99: tell its builder, thread room-12
+EOF
+expect 'base red: a concurrent wake sees the first wake claim' 0 check.json 'red31 | main_red | fix_claim(9001; "launch-fleet: base fix opening")' -- wake 31 <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
+EOF
+expect 'base red: a later wake sees the issue before search does' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red | fix_claim(9001; "launch-fleet: base fix opened #90")' -- wake 32 <<EOF
+base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
+EOF
+expect 'base red: an interrupted issue create stays visible for reconciliation' 0 check.json 'red31 | main_red | paused31 | fix_claim(9001; "launch-fleet: base fix opening") | .commitComments[0].created_at = at("11:10")' -- check <<EOF
+base red #31 for #12 at $S31: pause already recorded at $S77; reconcile fix issue claim 9001
+EOF
+expect 'base red: an existing multi-check fix covers a narrower PR failure' 0 check.json 'red31 | base_runs([["build", "failure"], ["test", "failure"]]) | fix_issue(90; "Main is red: build")' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
+EOF
+FR14_APPROVED='reviewing31 | issue(12; .comments = []) | pr_say(31; 3102; "11:30"; "VERDICT: APPROVE at \(sha(31))") | pull(31; .queue = true)'
+FR14_RECEIPT='pr_say(31; 3103; "11:40"; "launch-fleet: merge queued \(sha(31)): synthetic approval")'
+FR14_RED='pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")'
+FR14_PENDING='pull(31; .rollup = "PENDING" | .checks[1].status = "IN_PROGRESS" | .checks[1].conclusion = null)'
+expect 'FR14: red receipted head tells the builder and wakes the drop reader' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_RED" -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: red receipted head wakes again after the CI notice' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_RED"' | pr_say(31; 3104; "11:50"; "launch-fleet: CI failure sent \(sha(31))")' -- check <<EOF
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: pending receipted head wakes the drop reader' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING" -- wake 31 <<EOF
+merge #31 for #12 at $S31: exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit
+EOF
+expect 'FR14: red approved head without a receipt only tells the builder' 0 check.json "$FR14_APPROVED | $FR14_RED" -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder
+EOF
+expect 'FR14: pending approved head without a receipt keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_PENDING" -- check < /dev/null
+expect 'FR14: receipt for an older head cannot wake the current head' 0 check.json "$FR14_APPROVED | $FR14_PENDING"' | pr_say(31; 3103; "11:40"; "launch-fleet: merge queued \(sha(99)): before \(sha(31))")' -- check < /dev/null
+expect 'FR14: a receipt from an outsider does not count' 0 check.json "$FR14_APPROVED | $FR14_PENDING"' | pr_by(31; 3103; "11:40"; outsider; "launch-fleet: merge queued \(sha(31)): synthetic approval")' -- check < /dev/null
+expect 'FR14: a receipted head without current approval keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING"' | pr_say(31; 3104; "11:50"; "VERDICT: CHANGES at \(sha(31))")' -- check < /dev/null
+expect 'FR14: a blocked receipted head keeps waiting' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT | $FR14_PENDING"' | pr_say(31; 3104; "11:50"; "launch-fleet: merge blocked \(sha(31)): dropped twice at this head")' -- check < /dev/null
+expect 'FR14: a green receipted head keeps its usual merge line' 0 check.json "$FR14_APPROVED | $FR14_RECEIPT" -- check <<EOF
+merge #31 for #12 at $S31: APPROVE and CI green
+EOF
 # #2119: synthetic API windows; required names occur only after 40 contexts.
 expect 'contexts: overflow reads required checks on the third page' 0 check.json 'pr31 | pull(31; .checks = ([range(40) | {name: "optional-\(.)", status: "COMPLETED", conclusion: "SUCCESS"}] + .checks))' -- check <<EOF
 review #31 for #12 at $S31: first review
@@ -1028,8 +1150,13 @@ EOF
 expect 'a failed claim whose reason names a thread does not retire that reviewer' 0 check.json 'rechecking31("11:00") | pull(31; .comments |= map(if .id == 3104 then .body = "launch-fleet: review failed \(sha("31f")): thread thr_synrev31 never got the message" else . end))' -- check <<EOF
 re-check #31 for #12 at $S31F: tell its reviewer, thread thr_synrev31 (retry after "review failed $S31F: thread thr_synrev31 never got the message")
 EOF
-expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
+printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{}}' > "$tmp/discovery-routes.json"
+expect 'a review record that names no thread: look, since its reviewer cannot be checked' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' \
+  LAUNCH_FLEET_STATE="$tmp/discovery-routes.json" -- check <<EOF
 look #31: thread discovery is out of reach
+EOF
+expect 'a fresh install with no private thread map names the file to create' 0 check.json 'pr31 | pr_say(31; 3101; "11:00"; "launch-fleet: review started \(sha(31))")' -- check <<EOF
+look #31: private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with {"repo": "synthetic-owner/synthetic-repo", "threads": {}}
 EOF
 expect 'a review claim with no outcome after 10 minutes is reconciled' 0 check.json 'pr31 | pr_say(31; 3101; "11:40"; "launch-fleet: review starting \(sha(31))")' -- check <<EOF
 reconcile review #31 for #12 at $S31: claimed at 2026-11-01T11:40:00Z, no outcome after 10 minutes
@@ -1592,69 +1719,148 @@ fi
 A=$tmp/app-identity
 if { [ -n "${TEST_ONLY:-}" ] && [ "$TEST_ONLY" != 'app identity' ]; } || ! take; then
   :
-elif mkdir -p "$A/remote" "$A/bin" "$A/install/github-app" \
+elif mkdir -p "$A/remote" "$A/bin" "$A/shim" "$A/install/github-app" "$A/fixtures" \
   && printf 'one\n' > "$A/remote/version" && git -C "$A/remote" init -q && git -C "$A/remote" add -A \
   && git -C "$A/remote" -c user.name=synthetic -c user.email=synthetic@example.invalid commit -q -m one \
   && cp "$HERE/loop.sh" "$A/install/loop.sh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nexec "%s" "$@"\n' "$A/gh-token.log" "$tmp/bin/gh" > "$A/bin/gh" \
-  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' "$A/openwiz.log" > "$A/bin/openwiz" \
-  && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nsys.exit(9)\n' "'$A/helper.log'" > "$A/install/github-app/agent-token.py" \
-  && chmod +x "$A/bin/gh" "$A/bin/openwiz" \
+  && mkdir -p "$A/runtime/launch-fleet/scripts" "$A/runtime/setup/scripts" \
+  && cp "$HERE/../../setup/scripts/settings.py" "$A/runtime/setup/scripts/" \
+  && printf '#!/bin/sh\n[ "${1:-}" = overload ] && exit 0\ngh api user > /dev/null 2>&1\ncat "%s"\n' "$A/want" \
+    > "$A/runtime/launch-fleet/scripts/fleet.sh" \
+  && printf '%s\n' 'import base64, json, sys' \
+    'data = json.load(open(sys.argv[1]))["files"]["docs/agents/fleet.md"].encode()' \
+    'text = base64.b64encode(data).decode()' \
+    'body = "".join(text[n:n + 60] + "\n" for n in range(0, len(text), 60))' \
+    'print(json.dumps({"type": "file", "encoding": "base64", "size": len(data), "content": body}))' > "$A/contents.py" \
+  && printf '#!/bin/sh\nif [ $# = 2 ] && [ "$1" = api ] && [ "$2" = repos/synthetic-owner/synthetic-repo/contents/docs/agents/fleet.md ]; then\n  printf "read %%s\\n" "${GH_TOKEN:-none}" >> "%s"; echo read >> "%s"\n  "%s" -I "%s" "%s" || exit 1\n  exit "${FAKE_READ_STATUS:-0}"\nfi\nprintf "%%s\\n" "${GH_TOKEN:-none}" >> "%s"\nexec "%s" "$@"\n' \
+    "$A/read.log" "$A/order.log" "$PYTHON" "$A/contents.py" "$A/world.json" "$A/gh-token.log" "$tmp/bin/gh" > "$A/bin/gh" \
+  && printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\necho mint >> "%s"\nprintf "%%s\\n" synthetic-app-token-2394\n' \
+    "$A/openwiz.log" "$A/order.log" > "$A/bin/openwiz" \
+  && printf 'import sys\nopen(%s, "a").write(" ".join(sys.argv[1:]) + "\\n")\nopen(%s, "a").write("helper\\n")\nsys.exit(9)\n' \
+    "'$A/helper.log'" "'$A/order.log'" > "$A/install/github-app/agent-token.py" \
+  && printf '#!/bin/sh\necho "$*" >> "%s"\n"%s" -I "%s" "%s"\n' "$A/shim.log" "$PYTHON" "$A/contents.py" "$A/on.json" > "$A/shim/gh" \
+  && chmod +x "$A/bin/gh" "$A/bin/openwiz" "$A/shim/gh" \
+  && jq -r '.files["docs/agents/fleet.md"] | sub("\\| App \\| Synthetic, for the factory \\|\n"; "")' \
+    "$FIX/check.json" > "$A/base.md" \
+  && "$PYTHON" -I "$HERE/../../setup/scripts/test_settings.py" fixtures "$A/base.md" "$A/fixtures" > "$A/fixtures.list" \
+  && [ -s "$A/fixtures.list" ] \
   && jq --argjson now "$NOW" '.observed_at = $now | .budgets[] |= (.reset_at = ($now + 3600))' \
     "$HERE/carried/healthy.json" > "$A/observation.json"; then
   printf 'start #13: W3: widget page (spec #10)\n' > "$A/want"
-  python3 -I - "$HERE/../references/identity.md" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
+  python3 -I - "$HERE/../references/identity.md" "$(cd "$HERE/../../setup" && pwd)" > "$A/block.sh" <<'PY' || bad 'app identity: the block' "can't extract it"
 import sys
 text = open(sys.argv[1]).read()
 block = text.split('<!-- GI7 identity -->', 1)[1].split('```sh\n', 1)[1].split('```', 1)[0]
 sys.stdout.write(''.join(line[4:] if line.startswith('    ') else line.lstrip() + '\n' if not line.strip() else line
-                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo'))
+                         for line in block.splitlines(True)).replace('<owner>/<repo>', 'synthetic-owner/synthetic-repo')
+                 .replace("<the setup skill's folder>", sys.argv[2]))
 PY
   printf '%s\nprintf "token=%%s\\n" "$app_token"\n' "$(cat "$A/block.sh")" > "$A/block-run.sh"
   off="loop.sh: the App identity is off; GitHub as today's account"
   block_off="GitHub as today's account: the App identity is off"
-  app_loop() {
-    rm -rf "$A/home" "$A/cache" && : > "$A/gh-token.log" && : > "$A/openwiz.log" && : > "$A/helper.log"
-    (cd "$A" && env -u OPENWIZ_GITHUB_APP_KEY -u OPENWIZ_TOKEN_SERVICE -u GH_TOKEN -u GITHUB_TOKEN \
+  fresh() {
+    rm -rf "$A/home" "$A/cache" && : > "$A/gh-token.log" && : > "$A/openwiz.log" && : > "$A/helper.log" \
+      && : > "$A/read.log" && : > "$A/order.log" && : > "$A/shim.log"
+  }
+  loop_env() {
+    env -u OPENWIZ_GITHUB_APP_KEY -u OPENWIZ_TOKEN_SERVICE -u GH_TOKEN -u GITHUB_TOKEN \
       PATH="$A/bin:$tmp/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" \
       FAKE_GH_REMOTE="$A/remote" LAUNCH_FLEET_HOME="$A/home" LAUNCH_FLEET_NOW=$NOW LAUNCH_FLEET_CACHE="$A/cache" \
       LAUNCH_FLEET_OVERLOAD_INPUT="$A/observation.json" LAUNCH_FLEET_OVERLOAD_STATE="$A/pause.json" \
-      LAUNCH_FLEET_RUNTIME="$(cd "$HERE/../.." && pwd)" "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
+      LAUNCH_FLEET_RUNTIME="$A/runtime" "$@"
+  }
+  app_loop() {
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
       && cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
+      && [ "$(cat "$A/read.log")" = 'read none' ] \
+      && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
+  }
+  app_loop_key() {
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err") \
+      && cmp -s "$A/want" "$A/out" && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] \
+      && [ ! -s "$A/read.log" ] \
       && [ -s "$A/gh-token.log" ] && [ -z "$(grep -vx none "$A/gh-token.log")" ] && grep -qxF "$off" "$A/err"
   }
   app_block() {
-    : > "$A/openwiz.log" \
-      && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+    fresh && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+        FAKE_GH_WORLD="$A/world.json" FAKE_GH_LOG="$A/gh.log" "$@" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+      && [ "$(cat "$A/read.log")" = 'read none' ] \
       && [ ! -s "$A/openwiz.log" ] && [ "$(cat "$A/out")" = token= ] && [ "$(cat "$A/err")" = "$block_off" ]
   }
-  never_mints() {
-    rm -rf "$A/w" && mkdir "$A/w" && world check.json "merge12 | $1" "$A/w" > "$A/world.json" \
-      && step=key && app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
-      && step=service && app_loop OPENWIZ_TOKEN_SERVICE="$A/no-service" \
-      && step='key and service' && app_loop OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
-      && step=block && app_block
+  on_loop() {
+    want=$1; shift
+    fresh && (cd "$A" && loop_env "$@" /bin/sh "$A/install/loop.sh" > "$A/out" 2> "$A/err"; :) \
+      && [ "$(cat "$A/read.log")" = 'read none' ] && [ "$(cat "$A/order.log")" = "read
+$want" ] && [ ! -s "$A/shim.log" ]
   }
-  app_case() {
-    name="app identity: $1, loop.sh and the identity block never mint"; shift
-    cases=$((cases + 1)) step=world
-    if never_mints "$1"; then echo "ok   $name"; else
-      bad "$name" "($step) $(cat "$A/out" "$A/err" "$A/openwiz.log" "$A/helper.log" | head -c 400)"
+  app_on() {
+    step=key && app_loop_key OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+      && step=service && on_loop helper OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && [ "$(cat "$A/helper.log")" = "run --requester fleet-check --repository synthetic-owner/synthetic-repo --read -- sh $A/install/loop.sh" ] \
+      && step='key and service' && on_loop helper OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && [ ! -s "$A/openwiz.log" ] \
+      && step=block && fresh && (cd "$A" && env -u GH_TOKEN -u GITHUB_TOKEN PATH="$A/bin:$tmp/bin:$PATH" \
+        OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj FAKE_GH_WORLD="$A/world.json" /bin/sh "$A/block-run.sh" > "$A/out" 2> "$A/err") \
+      && [ "$(cat "$A/order.log")" = 'read
+mint' ] && [ "$(cat "$A/openwiz.log")" = 'github token --repository synthetic-owner/synthetic-repo' ] \
+      && [ "$(cat "$A/out")" = token=synthetic-app-token-2394 ]
+  }
+  never_mints() {
+    step=key && app_loop_key "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj \
+      && step=service && app_loop "$@" OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && step='key and service' && app_loop "$@" OPENWIZ_GITHUB_APP_KEY=c3ludGhldGlj OPENWIZ_TOKEN_SERVICE="$A/no-service" \
+      && step=block && app_block "$@"
+  }
+  served() {
+    rm -rf "$A/w" && mkdir "$A/w" && world check.json "merge12 | .files[\"docs/agents/fleet.md\"] = $(jq -Rs . < "$1")" "$A/w" > "$2"
+  }
+  report() {
+    if [ "$1" = 0 ]; then echo "ok   $name"; else
+      bad "$name" "($step) $(cat "$A/out" "$A/err" "$A/read.log" "$A/openwiz.log" "$A/helper.log" "$A/shim.log" | head -c 400)"
     fi
   }
-  row() { printf '.files["docs/agents/fleet.md"] += "%s"' "$1"; }
-  app_case 'with no App identity row' .
-  app_case 'with the row off' "$(row '| App identity | off |\n')"
-  app_case 'with the row on' "$(row '| App identity | on |\n')"
-  app_case 'with the row a backticked on' "$(row '| App identity | `on` |\n')"
-  app_case 'with two on rows' "$(row '| App identity | on |\n| App identity | on |\n')"
-  app_case 'with an on row and an indented duplicate off row (R6)' "$(row '| App identity | on |\n | App identity | off |\n')"
-  app_case 'with an on row inside an HTML comment (R6)' "$(row '\n<!--\n| App identity | on |\n-->\n')"
-  app_case 'with an on row outside the GitHub identity table' "$(row '\n## Elsewhere\n\n| App identity | on |\n')"
-  app_case 'with an on row inside a fenced example' "$(row '\n```md\n## GitHub identity\n\n| App identity | on |\n```\n')"
+  while read -r number state title; do
+    cases=$((cases + 1)) step=world
+    if [ "$state" = on ]; then
+      name="app identity: $title: one account read, then loop.sh and the block mint once or run the helper once"
+      served "$A/fixtures/$number.md" "$A/world.json" && app_on; report $?
+    else
+      name="app identity: $title: one account read, and loop.sh and the identity block never mint"
+      served "$A/fixtures/$number.md" "$A/world.json" && never_mints; report $?
+    fi
+  done < "$A/fixtures.list"
+  on_md=$(sed -n 's/^\([0-9]*\) on one canonical on row$/\1/p' "$A/fixtures.list")
+  off_md=$(sed -n 's/^\([0-9]*\) off the row off$/\1/p' "$A/fixtures.list")
+  served "$A/fixtures/$on_md.md" "$A/on.json"
+  cases=$((cases + 1)) step=world
+  name='app identity: a whole on answer, then gh exits non-zero: loop.sh and the identity block never mint'
+  cp "$A/on.json" "$A/world.json" && never_mints FAKE_READ_STATUS=1; report $?
+  inherited() {
+    printf '%s\n' "PATH=$A/shim:$A/bin:$tmp/bin:$PATH" "OPENWIZ_AGENT_TOKEN_PATH_WAS=1$A/bin:$tmp/bin:$PATH" \
+      OPENWIZ_AGENT_TOKEN_RUN=synthetic-run.json GH_TOKEN=synthetic-installation-token-2835
+  }
+  cases=$((cases + 1)) step=world
+  name="app identity: an inherited token step's gh shim answers on and the account answers off: never mints, never asks the shim"
+  served "$A/fixtures/$off_md.md" "$A/world.json" \
+    && step=service && app_loop $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" && [ ! -s "$A/shim.log" ] \
+    && step=block && app_block $(inherited) && [ ! -s "$A/shim.log" ]; report $?
+  cases=$((cases + 1)) step=world
+  name="app identity: an inherited token step's gh shim and the account both answer on: one account read, never the shim"
+  cp "$A/on.json" "$A/world.json" && step=service && on_loop helper $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service"; report $?
+  restore_fails() {
+    fresh && (cd "$A" && loop_env $(inherited) OPENWIZ_TOKEN_SERVICE="$A/no-service" "$1" -c \
+      'readonly GH_TOKEN; script=$1; shift; . "$script"' sh "$2" > "$A/out" 2> "$A/err"; :) \
+      && [ ! -s "$A/read.log" ] && [ ! -s "$A/openwiz.log" ] && [ ! -s "$A/helper.log" ] && [ ! -s "$A/shim.log" ]
+  }
+  cases=$((cases + 1)) step=world
+  name="app identity: with a canonical on row and a restore of today's account that fails, nothing reads fleet.md or mints"
+  cp "$A/on.json" "$A/world.json" \
+    && step='loop.sh under sh' && restore_fails sh "$A/install/loop.sh" \
+    && step='block under sh' && restore_fails sh "$A/block-run.sh" \
+    && step='loop.sh under bash' && restore_fails bash "$A/install/loop.sh" \
+    && step='block under bash' && restore_fails bash "$A/block-run.sh"; report $?
 else
-  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 9))
+  bad 'app identity' "can't set up its synthetic project"; cases=$((cases + 82))
 fi
 
 expect 'claim: the only claim goes' 0 check.json 'merge12 | say(13; 1301; "11:58"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
@@ -1922,6 +2128,18 @@ EOF
 FP=$(fp12 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' 10)
 expect 'machine: a plan changed since its machine approval starts nothing' 0 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' -- check <<EOF
 re-approve #10: changed since revision 1 (fingerprint now $FP)
+EOF
+expect 'machine: spec check accepts a valid machine plan approval' 0 check.json 'merge12 | machine_only' -- spec 10 <<EOF
+start #13: W3: widget page (spec #10)
+EOF
+expect 'machine: spec check refuses a stale machine plan approval' 0 check.json 'merge12 | machine_only @@then@@ issue(14; .blockedBy = [12])' -- spec 10 <<EOF
+re-approve #10: changed since revision 1 (fingerprint now $FP)
+EOF
+expect 'machine: claim accepts a valid machine plan approval' 0 check.json 'merge12 | machine_only | say(13; 1301; "11:59"; "launch-fleet: starting")' -- claim 13 1301 <<EOF
+go #13
+EOF
+expect 'machine: claim refuses a stale machine plan approval' 0 check.json 'merge12 | machine_only | say(13; 1301; "11:59"; "launch-fleet: starting") @@then@@ issue(14; .blockedBy = [12])' -- claim 13 1301 <<EOF
+withdraw #13: it is not on the frontier now
 EOF
 # R2 (decision 7030919773): video comment steering is off in every mode until
 # #1402's identity separation is verified, whoever posted the video. The hold,
@@ -4498,7 +4716,7 @@ only_reads "$tmp"/case-*/gh*.log "$tmp"/cache-*/gh.log "$tmp"/loop/log[0-9] "$tm
 expected=${TEST_EXPECTED:-1}
 case ${TEST_ONLY:-} in
   loop) expected=4 ;;
-  'app identity') expected=9 ;;
+  'app identity') expected=82 ;;
   fleet-loop) expected=2 ;;
   'contexts:*') expected=31 ;;
   'contexts R1:*') expected=4 ;;
@@ -4510,6 +4728,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
+  'base red:*') expected=29 ;;
   'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))

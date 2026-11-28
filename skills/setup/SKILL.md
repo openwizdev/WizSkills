@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up a project for fleets, writing its issue tracker, triage labels, glossary layout and fleet defaults (builder, reviewer, test commands, CI checks, merge rules) to docs/agents/. Use before a project's first fleet, when a skill finds docs/agents/ missing, or after one of those settings changes. To install OpenWiz itself or start a first fleet, use install.
+description: Configure a project for fleets, including its tracker, labels, glossary and defaults. Use when project settings are missing or need updating.
 version: 0.4.0
 ---
 
@@ -27,7 +27,7 @@ If `docs/agents/` already holds the files, read them first and see "Running it a
 - Builders, reviewers and merge rules the user already chose: the instructions file (`AGENTS.md` or `CLAUDE.md`), ADRs and spec comments.
 - Test commands: the instructions file and every `run:` step in `.github/workflows/*.yml` and `*.yaml`. CI checks: those job names, the rulesets (`gh api 'repos/{owner}/{repo}/rulesets'`, then each `rulesets/<id>`) and the default branch's protection.
 - Record authors: the project's App bot login (`<app-slug>[bot]`) and `gh api user --jq .login`.
-- App identity: `off`. Nothing reads the row yet, so never write `on` for it, and never run or probe `openwiz github token` to decide it.
+- App identity: `off`. Only the user turns it on, by setting the row to exactly `on` (`settings.py app-identity` reads it); never write `on` for it, and never run or probe `openwiz github token` to decide it.
 
 Done when every value in the four files has a named source, or is known to be missing.
 
@@ -47,7 +47,9 @@ Done when every missing setting has the user's answer.
 
 ## 3. Write
 
-Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). For configured Pro triage, create the template's `pro` label if missing and add the line `Pro repository: owner/name` on its own, with the real private Pro repository. Otherwise add no such line. Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels; private comments go only to the private repository, named with `--repo`.
+Fill each template. Every `fleet.md` value names its source: a linked file, a command, or `<decider>, <YYYY-MM-DD>: <decision> ([private record](<comment URL>)).` Create a label only for a role with none (`gh label create <name> --description "<meaning>"`). Write no run date, so an unchanged project gives the same bytes. Write only these four files and missing labels, plus, when `docs/agents/review-rules.md` is missing and the user accepts your one offer of it, that file from [the template](templates/review-rules.md) with every section empty; private comments go only to the private repository, named with `--repo`.
+
+For configured Pro triage, create the template's `pro` label if missing and add the line `Pro repository: owner/name` on its own, with the real private Pro repository. Otherwise add no such line.
 
 Done when the four files are written.
 

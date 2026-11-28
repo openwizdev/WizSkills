@@ -1,0 +1,62 @@
+[
+  {
+    "name": "not-an-object",
+    "raw": "[\"alpha-001\", \"delete\"]",
+    "expected_reason": "object"
+  },
+  {
+    "name": "duplicate-key",
+    "raw": "{\"id\": \"a-1\", \"id\": \"a-2\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "duplicate key"
+  },
+  {
+    "name": "missing-why-keep-field",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "missing"
+  },
+  {
+    "name": "extra-field",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null, \"extra\": 1}",
+    "expected_reason": "extra"
+  },
+  {
+    "name": "unknown-kind",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"archive\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "enum"
+  },
+  {
+    "name": "unknown-confidence",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"certain\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "enum"
+  },
+  {
+    "name": "unknown-size",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"XL\", \"ticket\": null}",
+    "expected_reason": "enum"
+  },
+  {
+    "name": "bad-evidence-format",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"just a note without arrow\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "pattern"
+  },
+  {
+    "name": "empty-evidence-list",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": null}",
+    "expected_reason": "minItems"
+  },
+  {
+    "name": "delete-without-why-keep",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"delete\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"unused\", \"evidence\": [\"git grep a.py -> 0 matches\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": \"Delete a.py\"}",
+    "expected_reason": "why_keep"
+  },
+  {
+    "name": "delete-without-paths",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"delete\", \"repo\": \"example/alpha\", \"paths\": [], \"what\": \"unused\", \"evidence\": [\"git grep a.py -> 0 matches\"], \"why_keep\": \"maybe used\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": \"Delete a.py\"}",
+    "expected_reason": "paths"
+  },
+  {
+    "name": "ticket-wrong-type",
+    "raw": "{\"id\": \"a-1\", \"kind\": \"fix\", \"repo\": \"example/alpha\", \"paths\": [\"a.py\"], \"what\": \"x\", \"evidence\": [\"cmd -> ok\"], \"why_keep\": \"\", \"confidence\": \"high\", \"size\": \"S\", \"ticket\": 123}",
+    "expected_reason": "type"
+  }
+]

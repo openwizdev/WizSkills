@@ -518,6 +518,22 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                 for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
         self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
 
+    def test_preflight_matches_the_installer_targets(self):
+        import re
+        text = SKILL.read_text()
+        preflight = text[text.index('## 1. Preflight'):text.index('## 2. Verified install')]
+        supported = preflight.split('Supported: ', 1)[1].split('. ', 1)[0]
+        with self.subTest('supported targets'):
+            self.assertCountEqual(re.findall(r'`([a-z0-9_]+-[a-z0-9_-]+)`', supported), [
+                'aarch64-apple-darwin', 'x86_64-apple-darwin',
+                'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+            ])
+        with self.subTest('unsupported targets'):
+            self.assertIn('Preflight refuses 32-bit ARM and musl Linux.', preflight)
+        self.assertIn('On Linux the build needs glibc 2.34 or later (`ldd --version`).', preflight)
+        self.assertIn('Linux on ARM before `0.1.1`', preflight)
+        self.assertNotIn('Linux on ARM is refused', preflight)
+
     def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
         text = SKILL.read_text()
         removal = text[text.index('## Recovery and removal'):]
@@ -595,9 +611,24 @@ class SkillCommandsMatchPackage(unittest.TestCase):
 
     def test_a_missing_gh_gets_its_install_step(self):
         text = self.parts()[0]
-        for words in ('login_gh_missing', 'https://cli.github.com', 'gh --version'):
+        step1 = text[text.index('## 1. '):text.index('## 2. ')]
+        for words in ('login_gh_missing', 'https://github.com/cli/cli/releases/latest', 'brew install gh',
+                      '~/.local/bin', 'checksums', 'gh --version', 'xcode-select --install'):
             self.assertIn(words, text)
-        self.assertIn('even on exit 0', text[text.index('## 1. '):text.index('## 2. ')])
+        self.assertIn('even on exit 0', step1)
+        self.assertIn("I'll install gh, GitHub's free helper tool, so I can set up your project for you. OK?", step1)
+        self.assertNotIn('https://cli.github.com', text)
+
+    def test_every_stop_names_the_help_line_and_skill_never_names_sudo(self):
+        text = self.parts()[0]
+        guards = text[text.index('## Guards'):text.index('## Where your agents run')]
+        step1 = text[text.index('## 1. '):text.index('## 2. ')]
+        help_line = "Stuck? I'll set it up with you, free 15 min: https://openwiz.dev/help/"
+        self.assertIn(help_line, guards)
+        self.assertIn(help_line, step1)
+        for platform in ('Windows', 'Chromebook', 'phone or tablet', 'Linux on ARM'):
+            self.assertIn(platform, step1)
+        self.assertNotRegex(text, r'(?i)\bsudo\b')
 
     def test_the_reader_finds_a_synthetic_skill_s_commands(self):
         text = ('Run `install open --root <root> --browser` and\n\n```sh\n'
@@ -1021,8 +1052,10 @@ class RemovalStopsTheHeartbeatThenUsesTheInstaller(unittest.TestCase):
         self.assertIn('Only for 0.1.0\'s installer, which has no `remove`', removal)
 
 
-HOST_QUESTION = ("Where should your agents run? This computer (Claude Code or Codex you're signed in to), "
-                 "boat.dev, or CloudRoom.")
+HOST_QUESTION = ("Where should your AI helpers work? I recommend `<recommended place>`, because "
+                 "`<why, in a few plain words>`. The choices are this computer (with the Claude Code or "
+                 "Codex you already use), boat.dev (a service that runs them online) or CloudRoom (an app "
+                 "that runs them for you). Shall I go with `<recommended place>`?")
 
 
 class NoCloudRoomRequired(unittest.TestCase):
@@ -1051,8 +1084,10 @@ class NoCloudRoomRequired(unittest.TestCase):
         at = self.text.index(HOST_QUESTION)
         self.assertLess(at, self.text.index('cloudroom.py', self.text.index('## Resume')))
         self.assertLess(at, self.text.index('## 1. Preflight'))
-        paragraph = self.text[self.text.rindex('\n\n', 0, at):self.text.index('\n\n', at)]
-        self.assertFalse('recommend' in paragraph.lower(), 'the host question recommends one host')
+        intro = self.text[self.text.rindex('For `choose-host`', 0, at):at]
+        self.assertIn('recommending **this computer** when you are Claude Code or Codex running on it', intro)
+        self.assertIn('otherwise **CloudRoom** when `room-cli` is on `PATH`, otherwise **this computer**', intro)
+        self.assertIn("the person's answer always wins", intro)
         step3 = self.between('## 3. ', '## 4. ')
         self.assertTrue('ignore every `cloudroom_*` code' in step3, 'cloudroom_* codes are not ignored')
         self.assertLess(step3.index('ignore every `cloudroom_*` code'), step3.index('| Code | Next |'))
@@ -1093,7 +1128,7 @@ class InstallHostReleaseTests(unittest.TestCase):
     def test_latest_is_read_before_the_host_question(self):
         skill = SKILL.read_text()
         self.assertLess(skill.index('OpenWiz/releases/latest'),
-                        skill.index('> Where should your agents run?'))
+                        skill.index('> Where should your AI helpers work?'))
 
     def test_resume_checks_the_installed_build_before_asking(self):
         skill = SKILL.read_text()

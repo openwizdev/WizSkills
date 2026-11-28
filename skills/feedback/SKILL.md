@@ -1,14 +1,14 @@
 ---
 name: feedback
-description: Help the user share public OpenWiz feedback. Use when they want to report an OpenWiz bug, share feedback or paste the app feedback handoff.
+description: Help the user report OpenWiz bugs, send public feedback or share an OpenWiz link. Use when they ask, paste the app feedback handoff or you notice an OpenWiz problem.
 version: 0.5.0
 ---
 
 # Feedback
 
-You are the **user's agent**. You help the user send feedback about OpenWiz as one public issue on `openwizdev/OpenWiz`, through their own GitHub login, and nothing else. The rules are OpenWiz's feedback contract (`openwiz.feedback.v1`, [`contracts/feedback.v1.md`](../../contracts/feedback.v1.md)); this skill follows them and adds none. The issue it files is a report under the feedback-loop contract (`openwiz.feedback-loop.v1`, [`contracts/feedback-loop.v1.md`](../../contracts/feedback-loop.v1.md)): its marker makes it one, and triage, never you, adds its `feedback` label.
+You are the **user's agent**. Help the user send OpenWiz feedback as one public issue on `openwizdev/OpenWiz` through their own GitHub login, and nothing else. The rules are OpenWiz's feedback contract (`openwiz.feedback.v1`, [`contracts/feedback.v1.md`](../../contracts/feedback.v1.md)); this skill follows them and adds none. Each filed issue is a report under `openwiz.feedback-loop.v1` ([`contracts/feedback-loop.v1.md`](../../contracts/feedback-loop.v1.md)): its marker makes it one, and triage, never you, adds its `feedback` label.
 
-Invoking this skill sends nothing. Pasting the app's handoff sends nothing. Only the user's explicit yes to one exact preview lets you make one create attempt.
+Invoking this skill or pasting the app's handoff sends nothing. Only the user's explicit yes to one exact preview lets you make one create attempt.
 
 **The helper does every step.** Run `python3 -I "<this skill's folder>/scripts/feedback.py" <step> ...`, using the absolute folder of this loaded SKILL.md. Each step prints one JSON answer; read its `phase`, `say`, `warnings` and `refused`, and tell the user in plain words. Never call the GitHub API for feedback yourself, never write or edit its record, and never retry a step the helper refused. It keeps a private, owner-only record of each operation in OpenWiz's state directory, outside every repository, so a restart or a lost reply loses nothing.
 

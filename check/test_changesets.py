@@ -1,3 +1,6 @@
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -6,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 GIT_ENV = {'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid',
@@ -26,6 +30,7 @@ class Repo:
         test.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / 'check').mkdir()
         shutil.copy(ROOT / 'check/changesets.py', self.dir / 'check/changesets.py')
+        shutil.copy(ROOT / 'check/run.py', self.dir / 'check/run.py')
         (self.dir / '.changeset').mkdir()
         shutil.copy(ROOT / '.changeset/config.json', self.dir / '.changeset/config.json')
         (self.dir / '.changeset/README.md').write_text('# Changesets\n')
@@ -129,6 +134,19 @@ class Gate(unittest.TestCase):
             r.write('skills/beta/SKILL.md', skill_md('beta', None))
         self.assertEqual(self.pr(change), (0, ['changeset check: pass (no skill changed)']))
 
+    def test_a_mode_only_skill_md_edit_needs_a_changeset(self):
+        def change(r):
+            (r.dir / 'skills/alpha/SKILL.md').chmod(0o755)
+        self.assertEqual(self.pr(change), (1, [
+            'changeset check: `alpha` changed but no new changeset names it: '
+            'add one under .changeset/ (see .changeset/README.md)',
+            'changeset check: fail']))
+
+        def noted(r):
+            (r.dir / 'skills/alpha/SKILL.md').chmod(0o755)
+            r.note('mode', {'alpha': 'patch'}, 'Marks the skill executable.')
+        self.assertEqual(self.pr(noted), (0, ['changeset check: pass (alpha)']))
+
     def test_a_non_skill_change_needs_no_changeset(self):
         self.assertEqual(self.pr(lambda r: r.write('README.md', 'Docs.\n')),
                          (0, ['changeset check: pass (no skill changed)']))
@@ -186,11 +204,28 @@ class Release(unittest.TestCase):
             '',
             '## 0.2.1 - 2026-01-02',
             '',
-            '- `alpha` 0.2.1: Fixes a typo.',
-            '- `beta` 0.2.1: Fixes a typo.',
+            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
             '- `beta` 0.2.1: Fixes a link.',
         ]))
         self.assertEqual(repo.snapshot(), before)
+
+    def test_one_note_prints_its_summary_once_and_a_second_note_stays(self):
+        repo = Repo(self, {'alpha': '0.2.0', 'beta': '0.2.0'}, plugin='0.2.0')
+        repo.note('both', {'alpha': 'patch', 'beta': 'patch'}, 'Fixes a typo.')
+        repo.note('again', {'beta': 'patch'}, 'Fixes a typo.')
+        code, out = self.release(repo)
+        self.assertEqual((code, out), (0, [
+            'release: wizskills 0.2.0 -> 0.2.1 (patch)',
+            'why: 2 skills changed, all patch',
+            'skill alpha: 0.2.0 -> 0.2.1 (patch)',
+            'skill beta: 0.2.0 -> 0.2.1 (patch)',
+            'dry run: nothing written',
+            '',
+            '## 0.2.1 - 2026-01-02',
+            '',
+            '- `beta` 0.2.1: Fixes a typo.',
+            '- `alpha` 0.2.1, `beta` 0.2.1: Fixes a typo.',
+        ]))
 
     def test_a_new_step_makes_a_minor_bundle(self):
         repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
@@ -224,7 +259,6 @@ class Release(unittest.TestCase):
             '',
             '- Skills added: `omega`.',
             '- Skills removed: `beta`.',
-            '- Swaps beta for omega.',
             '- `omega` 0.1.1: Swaps beta for omega.',
         ]))
 
@@ -263,6 +297,144 @@ class Release(unittest.TestCase):
         status = repo.git('status', '--porcelain').splitlines()
         self.assertEqual(sorted(status), [' D .changeset/one.md', ' M .claude-plugin/plugin.json',
                                           ' M CHANGELOG.md', ' M skills/alpha/SKILL.md'])
+
+    def test_a_bad_marketplace_leaves_versions_and_notes_unchanged(self):
+        for text in ('{}\n', '{"plugins":[]}\n', 'not json\n', '{"plugins":[1]}\n', '[]\n',
+                     marketplace_json(source='./other'), marketplace_json(version='0.2.1')):
+            with self.subTest(text=text):
+                repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+                repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+                repo.write('.claude-plugin/marketplace.json', text)
+                repo.commit('pending')
+                before = repo.snapshot()
+                self.assertEqual(repo.run('release', '--date', '2026-01-02')[0], 0)
+                code, _out = repo.run('release', '--date', '2026-01-02', '--write')
+                self.assertNotEqual(code, 0)
+                self.assertEqual(repo.snapshot(), before)
+
+    def test_write_updates_a_recorded_marketplace_version(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.write('.claude-plugin/marketplace.json', marketplace_json())
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        code, _out = self.release(repo, '--write')
+        self.assertEqual(code, 0)
+        market = json.loads((repo.dir / '.claude-plugin/marketplace.json').read_text())
+        self.assertEqual(market['plugins'][0]['version'], '0.2.1')
+        self.assertFalse((repo.dir / '.changeset/one.md').exists())
+
+    def test_a_failed_write_restores_versions_and_notes(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        repo.commit('pending')
+        before = repo.snapshot()
+        (repo.dir / 'CHANGELOG.md').chmod(0o444)
+        code, _out = repo.run('release', '--date', '2026-01-02', '--write')
+        self.assertNotEqual(code, 0)
+        self.assertEqual(repo.snapshot(), before)
+
+    def test_a_short_write_never_truncates_the_previous_changelog(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        before = repo.snapshot()
+        write_text, reached = Path.write_text, []
+
+        def short_write(path, text, **kwargs):
+            if path.name == 'CHANGELOG.md' and repo.dir in path.parents:
+                write_text(path, text[:10], **kwargs)
+                reached.append(path)
+                raise OSError('synthetic short write')
+            return write_text(path, text, **kwargs)
+
+        with patch.object(Path, 'write_text', short_write):
+            self.assertEqual(run_release_here(repo), 2)
+        self.assertEqual(len(reached), 1)
+        self.assertEqual(repo.snapshot(), before)
+
+    def test_an_interrupt_restores_versions_and_consumed_notes_before_retry(self):
+        for rel in ('.claude-plugin/plugin.json', '.changeset/one.md'):
+            with self.subTest(interrupted=rel):
+                repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+                repo.note('one', {'alpha': 'patch'})
+                repo.note('two', {'alpha': 'patch'})
+                before = repo.snapshot()
+                target = repo.dir / rel
+                write_text, replace, unlink = Path.write_text, os.replace, Path.unlink
+                reached = []
+
+                def interrupt(path):
+                    if path == target and not reached:
+                        reached.append(path)
+                        raise KeyboardInterrupt
+
+                def write_then_interrupt(path, *args, **kwargs):
+                    written = write_text(path, *args, **kwargs)
+                    interrupt(path)
+                    return written
+
+                def replace_then_interrupt(source, destination):
+                    replace(source, destination)
+                    interrupt(Path(destination))
+
+                def unlink_then_interrupt(path, *args, **kwargs):
+                    unlink(path, *args, **kwargs)
+                    interrupt(path)
+
+                with patch.object(Path, 'write_text', write_then_interrupt), \
+                        patch.object(os, 'replace', replace_then_interrupt), \
+                        patch.object(Path, 'unlink', unlink_then_interrupt):
+                    try:
+                        code = run_release_here(repo)
+                    except KeyboardInterrupt:
+                        code = 130
+                self.assertNotEqual(code, 0)
+                self.assertEqual(reached, [target])
+                self.assertEqual(repo.snapshot(), before)
+                self.assertEqual(self.release(repo, '--write')[0], 0)
+                self.assertEqual((repo.dir / 'skills/alpha/SKILL.md').read_text(), skill_md('alpha', '0.2.1'))
+                self.assertFalse((repo.dir / '.changeset/one.md').exists())
+                self.assertFalse((repo.dir / '.changeset/two.md').exists())
+
+    def test_a_retry_refuses_when_an_earlier_write_still_needs_recovery(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        repo.write('.wizskills-release/before/skills/alpha/SKILL.md', skill_md('alpha', '0.2.0'))
+        repo.write('.wizskills-release/applying', '')
+        repo.write('skills/alpha/SKILL.md', skill_md('alpha', '0.2.1'))
+        before = repo.snapshot()
+        for args in ((), ('--write',)):
+            with self.subTest(args=args):
+                self.assertEqual(repo.run('release', '--date', '2026-01-02', *args)[0], 2)
+                self.assertEqual(repo.snapshot(), before)
+
+    def test_the_version_plan_does_not_read_generated_package_changelogs(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.note('one', {'alpha': 'patch'})
+        read_text = Path.read_text
+
+        def read_without_generated_changelog(path, *args, **kwargs):
+            if path.name == 'CHANGELOG.md' and any(p.startswith('wizskills-release-') for p in path.parts):
+                raise AssertionError('the version plan read a generated package changelog')
+            return read_text(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', read_without_generated_changelog):
+            self.assertEqual(run_release_here(repo, write=False), 0)
+
+
+def marketplace_json(**entry):
+    return json.dumps({'name': 'wizskills', 'owner': {'name': 'Synthetic'},
+                       'plugins': [dict({'name': 'openwiz', 'source': './', 'version': '0.2.0'}, **entry)]}) + '\n'
+
+
+def run_release_here(repo, write=True):
+    spec = importlib.util.spec_from_file_location('synthetic_changesets', repo.dir / 'check/changesets.py')
+    changesets = importlib.util.module_from_spec(spec)
+    with patch.object(sys, 'dont_write_bytecode', True):
+        spec.loader.exec_module(changesets)
+    argv = ['release', '--date', '2026-01-02']
+    if write:
+        argv.append('--write')
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return changesets.main(argv)
 
 
 IGNORED_NAMES = ('.hidden-fix.md', 'Readme.md', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
@@ -326,10 +498,9 @@ class FirstBundle(unittest.TestCase):
         repo = self.wave()
         section = ['## 0.2.0 - 2026-01-02', '',
                    '- Skills removed: `old`.',
-                   '- Removes old.',
                    '- `alpha` 0.2.0: Alpha is rewritten.',
-                   '- `beta` 0.2.0: Beta and gamma are rewritten.',
-                   '- `gamma` 0.2.0: Beta and gamma are rewritten.']
+                   '- `beta` 0.2.0, `gamma` 0.2.0: Beta and gamma are rewritten.',
+                   '- Removes old.']
         head = ['release: wizskills 0.1.2 -> 0.2.0 (first bundle)',
                 'why: the first bundle, every skill at 0.2.0']
         self.assertEqual(repo.run('release', '--first', '--date', '2026-01-02'),
@@ -417,9 +588,9 @@ class Removal(unittest.TestCase):
             '## 0.3.0 - 2026-01-02',
             '',
             '- Skills removed: `beta`.',
-            '- Removes beta.',
             '- Beta gets a fix.',
             '- `alpha` 0.3.0: Alpha and beta learn a step.',
+            '- Removes beta.',
         ]))
 
     def test_release_refuses_a_new_or_edited_note_naming_a_removed_skill(self):
@@ -446,6 +617,16 @@ class Removal(unittest.TestCase):
         repo.commit('pending')
         self.assertEqual(repo.run('release', '--date', '2026-01-02'),
                          (1, ['release: .changeset/typo.md `alpah` is not a skill or `wizskills`']))
+
+
+class GrillRecords(unittest.TestCase):
+    def test_the_grill_records_suite_runs_isolated(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('wizskills_run_grill', ROOT / 'check/run.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.SUITES['grill'][1],
+                         ['python3', '-I', 'skills/grill/scripts/test_records.py'])
 
 
 if __name__ == '__main__':

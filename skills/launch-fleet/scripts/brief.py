@@ -27,56 +27,54 @@ import sys
 HARNESS_SKILL_PATHS = (
     ('codex', 'Codex',
      'CODEX_HOME/plugins/cache (default HOME/.codex/plugins/cache) or CODEX_HOME/skills (default HOME/.codex/skills)'),
-    ('claude-code', 'Claude',
+    ('claude', 'Claude',
      'CLAUDE_CODE_PLUGIN_CACHE_DIR/cache when set, otherwise CLAUDE_CONFIG_DIR/plugins/cache '
      '(default HOME/.claude/plugins/cache), or CLAUDE_CONFIG_DIR/skills (default HOME/.claude/skills)'),
-    ('antigravity', 'Antigravity (agy)', 'HOME/.gemini/config/skills or HOME/.agents/skills'),
-    ('gemini', 'Gemini', 'HOME/.gemini/skills or HOME/.agents/skills'),
-    ('cursor', 'Cursor', 'HOME/.cursor/skills or HOME/.agents/skills'),
-    ('opencode', 'OpenCode',
-     'XDG_CONFIG_HOME/opencode/skills (default HOME/.config/opencode/skills) or HOME/.agents/skills'),
+    ('agy', 'Antigravity (agy)', 'HOME/.gemini/config/skills'),
+    ('gemini', 'Gemini', 'HOME/.gemini/skills'),
+    ('cursor', 'Cursor', 'HOME/.cursor/skills'),
+    ('opencode', 'OpenCode', 'XDG_CONFIG_HOME/opencode/skills (default HOME/.config/opencode/skills)'),
     ('grok', 'Grok', 'HOME/.grok/skills'),
-    ('copilot', 'Copilot', 'COPILOT_HOME/skills (default HOME/.copilot/skills) or HOME/.agents/skills'),
-    ('pi', 'Pi', 'HOME/.pi/agent/skills or HOME/.agents/skills'),
-    ('goose', 'Goose', 'XDG_CONFIG_HOME/goose/skills (default HOME/.config/goose/skills) or HOME/.agents/skills'),
-    ('amp', 'Amp', 'XDG_CONFIG_HOME/agents/skills (default HOME/.config/agents/skills) or HOME/.agents/skills'),
-    ('auggie', 'Auggie', 'HOME/.augment/skills or HOME/.agents/skills'),
-    ('junie', 'Junie', 'HOME/.junie/skills or HOME/.agents/skills'),
-    ('kilo', 'Kilo', 'HOME/.kilocode/skills or HOME/.agents/skills'),
-    ('kimi', 'Kimi', 'KIMI_CODE_HOME/skills (default HOME/.kimi-code/skills) or HOME/.agents/skills'),
-    ('qwen', 'Qwen', 'HOME/.qwen/skills or HOME/.agents/skills'),
-    ('oz', 'Oz', 'HOME/.agents/skills'),
-    ('droid', 'Droid', 'HOME/.factory/skills or HOME/.agents/skills'),
-    ('hermes', 'Hermes', 'HOME/.hermes/skills or HOME/.agents/skills'),
-    ('boat', 'Boat', 'HOME/wizskills/skills or HOME/.agents/skills'),
+    ('copilot', 'Copilot', 'COPILOT_HOME/skills (default HOME/.copilot/skills)'),
+    ('pi', 'Pi', 'HOME/.pi/agent/skills'),
+    ('goose', 'Goose', 'XDG_CONFIG_HOME/goose/skills (default HOME/.config/goose/skills)'),
+    ('amp', 'Amp', 'XDG_CONFIG_HOME/agents/skills (default HOME/.config/agents/skills)'),
+    ('auggie', 'Auggie', 'HOME/.augment/skills'),
+    ('junie', 'Junie', 'HOME/.junie/skills'),
+    ('kilo', 'Kilo', 'HOME/.kilo/skills'),
+    ('kimi', 'Kimi', 'KIMI_CODE_HOME/skills (default HOME/.kimi-code/skills)'),
+    ('qwen', 'Qwen', 'HOME/.qwen/skills'),
+    ('oz', 'Oz', 'the shared roots'),
+    ('droid', 'Droid', 'HOME/.factory/skills'),
+    ('hermes', 'Hermes', 'HOME/.hermes/skills'),
+    ('prime', 'Prime', 'HOME/.prime/agent/skills'),
+    ('mistral', 'Mistral', 'VIBE_HOME/skills (default HOME/.vibe/skills)'),
+    ('devin', 'Devin', 'XDG_CONFIG_HOME/devin/skills (default HOME/.config/devin/skills)'),
 )
 WIZSKILLS_REPO = 'https://github.com/openwizdev/WizSkills.git'
 SEMVER = r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?'
+WIZSKILLS_VERSION = '0.5.0'
+SHARED_SKILL_ROOTS = ("Every harness also reads HOME/.agents/skills, the project's .agents/skills, "
+                      'and $HOME/wizskills/skills.')
 
 
 def wizskills_clone_command():
-    try:
-        manifest = Path(__file__).resolve().parents[3] / '.claude-plugin' / 'plugin.json'
-        data = json.loads(manifest.read_text())
-    except (IndexError, OSError, ValueError, TypeError):
-        data = None
-    version = data.get('version') if isinstance(data, dict) and data.get('name') == 'openwiz' else None
-    if isinstance(version, str) and re.fullmatch(SEMVER, version):
-        return 'git clone --depth 1 --branch v%s %s' % (version, WIZSKILLS_REPO)
+    if isinstance(WIZSKILLS_VERSION, str) and re.fullmatch(SEMVER, WIZSKILLS_VERSION):
+        return 'git clone --depth 1 --branch v%s %s' % (WIZSKILLS_VERSION, WIZSKILLS_REPO)
     return 'git clone --depth 1 %s' % WIZSKILLS_REPO
 
 
-LOOKUP = ("Read 'skills/{s}/SKILL.md' only when this checkout's .claude-plugin/plugin.json has manifest name openwiz "
-          "and entry ./skills/{s} (never another repository's skills/); otherwise find '{s}/SKILL.md' or "
-          "'*/skills/{s}/SKILL.md' inside your own harness's skills folder or configured plugin cache: "
+LOOKUP = ("Read 'skills/{s}/SKILL.md' only when the real path of this checkout's skills/ has a parent folder whose "
+          ".claude-plugin/plugin.json has manifest name openwiz and entry ./skills/{s} (never another repository's "
+          "skills/); otherwise find '{s}/SKILL.md' or '*/skills/{s}/SKILL.md' inside your own harness's skills folder "
+          "or configured plugin cache: "
           + '; '.join('%s uses %s' % (label, path_spec) for _, label, path_spec in HARNESS_SKILL_PATHS)
-          + "; for another harness use HOME/.agents/skills or its installation metadata. Prefer active installation "
-          "metadata over cache scanning when available. During scans exclude other harness caches, source checkouts, "
-          "orphaned versions marked .orphaned_at, and targets outside the selected root. Follow symlinks and "
-          "deduplicate real paths. If no installed copy is found, clone WizSkills ({clone}) and read its "
-          "skills/{s}/SKILL.md. Verify .claude-plugin/plugin.json manifest name openwiz and entry ./skills/{s} "
-          "(or an installed copy's .openwiz-skill marker); report missing, unreadable or ambiguous matches, "
-          "otherwise read the unique matching file and follow it")
+          + '. ' + SHARED_SKILL_ROOTS + ' Prefer active installation metadata over cache scanning when available. '
+          "During scans exclude other harness caches, source checkouts, orphaned versions marked .orphaned_at, and "
+          "targets outside the selected root. Follow symlinks and deduplicate real paths. If no installed copy is "
+          "found, clone WizSkills ({clone}) and read its skills/{s}/SKILL.md. Verify .claude-plugin/plugin.json "
+          "manifest name openwiz and entry ./skills/{s} (or an installed copy's .openwiz-skill marker); report "
+          "missing, unreadable or ambiguous matches, otherwise read the unique matching file and follow it")
 N = r'[1-9][0-9]{0,8}'
 REPO = r'[A-Za-z0-9-]+/[A-Za-z0-9_.-]+'
 REF = REPO + '#' + N

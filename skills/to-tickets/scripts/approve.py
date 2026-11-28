@@ -411,6 +411,106 @@ def check_width(graph):
     return why, chain, widest
 
 
+FLAT_SINCE = '2026-11-28T00:00:00Z'
+MAX_CHAIN = 5
+MAX_RATIO = (2, 3)
+RATIO_FLOOR = 3
+WHY_DEEP = re.compile(r'Why deep: *(\S.*)')
+
+
+def flat_spec(spec_text):
+    spec = json.loads(spec_text)
+    created = spec.get('createdAt') if isinstance(spec, dict) else None
+    if not isinstance(created, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', created):
+        raise Unreadable('the spec has no createdAt')
+    return created >= FLAT_SINCE, spec.get('body') if isinstance(spec.get('body'), str) else ''
+
+
+def check_depth(graph, spec_text, chain):
+    flat, spec_body = flat_spec(spec_text)
+    count = sum(1 for t in graph['tickets'] if t['state'] == 'OPEN')
+    deep = chain > MAX_CHAIN or (chain > RATIO_FLOOR and chain * MAX_RATIO[1] > count * MAX_RATIO[0])
+    if not flat or not deep:
+        return []
+    named = {t['number'] for t in graph['tickets']} | {b['number'] for t in graph['tickets'] for b in t['blocked_by']}
+    for line in visible_lines(spec_body):
+        m = WHY_DEEP.fullmatch(line.rstrip())
+        if m and {int(n) for n in re.findall(r'#([1-9][0-9]*)\b', m[1])} & named:
+            return []
+    return [f'the critical chain is {chain} for {count} open tickets, over the limit of {MAX_CHAIN} or of '
+            f'{MAX_RATIO[0]}/{MAX_RATIO[1]} of the open tickets once over {RATIO_FLOOR}; cut a contract-first '
+            'ticket that both sides wait on, or add a `Why deep: <the real needs, naming their tickets>` line '
+            'to the spec']
+
+
+REASON_WORD = re.compile(r"[A-Za-z]+(?:['-][A-Za-z]+)*'?")
+FILLER = set('a an the and or nor its their this these those of to for from with in on at by as per plus both each every '
+             'all any it'.split())
+INTERFACE = set('command subcommand flag option argument form format type schema file stub interface signature field '
+                'path name header shape exit code answer output input json'.split())
+CLAUSE = re.compile(r',?\s+(?:which|that|whose|who)\b(.*)$')
+EXTENDS = re.compile(r'\b(?:extends?|extending|modifies|changes|builds on)\b')
+
+
+def behaviour_words(reason):
+    text = re.sub(r'`[^`]*`', ' ', reason.strip())
+    m = CLAUSE.search(text)
+    head, rest = (text[:m.start()], m[1]) if m else (text, '')
+    words = []
+    for piece in head.split():
+        word = piece.strip('()[]{}"\',.;:!?').lower()
+        base = word.removesuffix("'s").rstrip("'")
+        if not REASON_WORD.fullmatch(word) or base in FILLER:
+            continue
+        if base in INTERFACE or (base.endswith('s') and base[:-1] in INTERFACE):
+            continue
+        words.append(base)
+    return words, bool(EXTENDS.search(rest))
+
+
+def blocker_title(repo, number):
+    message = f'cannot read the title of #{number} in {repo}'
+    try:
+        out = subprocess.run(['gh', 'issue', 'view', str(number), '--repo', repo, '--json', 'title'],
+                             capture_output=True, text=True, check=True)
+        title = json.loads(out.stdout)['title']
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError) as e:
+        raise Unreadable(message) from e
+    if not isinstance(title, str) or not title.strip():
+        raise Unreadable(message)
+    return title
+
+
+def check_reasons(graph, agents, spec_text):
+    if not flat_spec(spec_text)[0]:
+        return []
+    titles = {t['number']: t['title'] for t in graph['tickets']}
+    repo = re.escape(graph['repo'])
+    why = []
+    for t in agents:
+        if 'live check' in t['title'].lower():
+            continue
+        open_blockers = {b['number'] for b in t['blocked_by'] if b['state'] == 'OPEN'}
+        for line in section(t['body'], 'Links') or []:
+            m = re.fullmatch(rf'- (?:(?i:{repo}))?#([1-9][0-9]*) real:(.*)', line.rstrip(' \t'))
+            if not m:
+                continue
+            blocker = int(m[1])
+            if blocker not in open_blockers:
+                continue
+            words, extends = behaviour_words(m[2])
+            if words or extends:
+                continue
+            if blocker not in titles:
+                titles[blocker] = blocker_title(graph['repo'], blocker)
+            if titles[blocker].rstrip().lower().endswith(', first'):
+                continue
+            why.append(f'#{t["number"]}: the real line for #{blocker} names only an interface, not the behaviour '
+                       f'#{t["number"]} needs; name that behaviour, or say the ticket extends #{blocker}\'s code, '
+                       'or block on a contract-first ticket instead')
+    return why
+
+
 def check_owned(graph, agents):
     why, owners = [], {}
     for t in agents:
@@ -525,6 +625,7 @@ def main():
         failures = [('links', why) for why in check_links(graph_text)]
         open_tickets = [t for t in graph['tickets'] if t['state'] == 'OPEN']
         agents = [t for t in open_tickets if not human(t)]
+        failures += [('links', why) for why in check_reasons(graph, agents, spec_text)]
         owned_why, owners = check_owned(graph, agents)
         checkouts = {graph['repo'].lower(): args.root.resolve(), **extra_checkouts}
         failures += [('relies', why) for why in check_relies(agents, owners, checkouts)]
@@ -532,6 +633,7 @@ def main():
         failures += [('sizes', why) for why in size_why]
         width_why, chain, widest = check_width(graph)
         failures += [('width', why) for why in width_why]
+        failures += [('width', why) for why in check_depth(graph, spec_text, chain)]
         failures += [('owned paths', why) for why in owned_why]
         failures += [('checkpoints', why) for why in check_checkpoints(spec_text, graph, revision)]
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, Unreadable) as e:

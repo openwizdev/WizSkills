@@ -2048,13 +2048,18 @@ def ticket_lines_now($s): . as $t
            ($c.statusCheckRollup | required_ci) as $ci
            | ([$p.comments.nodes[] | select(.body | startswith("VERDICT: "))] | max_by(.databaseId)) as $v
            | ([$v.body // "" | first_line | capture("^VERDICT: (?<verdict>APPROVE|CHANGES) at (?<commit>[0-9a-f]{40})\\s*$")] | first) as $verdict
-           | if $ci == "failed" then
-               (if any($rs[]; (.r | test("^CI failure sent\\b")) and (.r | names($head))) then empty
-                # Another repository has another base: its builder is told, as before.
-                elif ($p | pr_ref | startswith("#") | not) then "CI failed \($at): tell its builder\($t | bthread)"
-                elif $W.base == null then "base read"
-                else base_lines($at; $rs; $head; $c; $t | bthread) end)
-             elif $ci != "green" then empty
+           | if $ci != "green" then
+               (if $ci == "failed" and (any($rs[]; (.r | test("^CI failure sent\\b")) and (.r | names($head))) | not) then
+                 # Another repository has another base: its builder is told, as before.
+                 if ($p | pr_ref | startswith("#") | not) then "CI failed \($at): tell its builder\($t | bthread)"
+                 elif $W.base == null then "base read"
+                 else base_lines($at; $rs; $head; $c; $t | bthread) end
+                else empty end),
+               (if $p.isMergeQueueEnabled == true and $verdict.verdict == "APPROVE" and $verdict.commit == $head
+                   and any($p.comments.nodes[]; .body | split("\n")[0] | test("^launch-fleet: merge queued " + $head + "\\b"))
+                   and (any($rs[]; kind("merge blocked") | .r | names($head)) | not) then
+                  "merge \($at): exact-head queue receipt; run merge.py merge to read the drop, skipping merge.py admit"
+                else empty end)
              elif $v != null and $verdict == null then look($p.number; $rs; "its latest VERDICT line is not \"VERDICT: APPROVE|CHANGES at <the full commit>\"")
              elif $verdict != null and $verdict.commit == $head then
                (if $verdict.verdict == "APPROVE" then

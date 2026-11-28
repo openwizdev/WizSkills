@@ -26,9 +26,16 @@ from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 REPO = 'synthetic-owner/synthetic-repo'
+
+
+def front_version(text):
+    found = re.search(r'''(?m)^version: (["']?)([0-9]+\.[0-9]+\.[0-9]+)\1$''', text)
+    return found and found.group(2)
+
+
 # launch-fleet's own installed version, its SKILL.md front matter, which the status writer
 # binds (#1663); the bundle's version can differ from it.
-VERSION = re.search(r'(?m)^version: ([0-9.]+)$', (HERE.parent / 'SKILL.md').read_text()).group(1)
+VERSION = front_version((HERE.parent / 'SKILL.md').read_text())
 FLEET_MD = ('# Fleet settings\n\n## GitHub identity\n\n| Setting | Value |\n| --- | --- |\n'
             '| Record authors | `openwiz[bot]`, `synthetic-owner` |\n')
 MARK = 'launch-fleet: driver start failed'
@@ -109,6 +116,10 @@ class Project:
 
     def saved(self):
         return json.loads(self.runs.read_text()) if self.runs.exists() else None
+
+    def labels(self):
+        path = Path(str(self.runs) + '.requesters')
+        return json.loads(path.read_text()) if path.exists() else None
 
     def github(self):
         return json.loads(self.world.read_text())
@@ -236,7 +247,7 @@ class Host(unittest.TestCase):
         self.assertEqual(len(p.calls()), 1)
 
     def test_start_sends_the_named_skill_to_the_driver(self):
-        for skill in ('review-ticket', 'launch-fleet'):
+        for skill, who in (('review-ticket', 'reviewer-7'), ('launch-fleet', 'fleet-7')):
             with self.subTest(skill):
                 p = Project(self)
                 self.assertEqual(p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', skill),
@@ -244,6 +255,8 @@ class Host(unittest.TestCase):
                 self.assertEqual(p.calls(), [{'host': 'local', 'command': 'start', 'input': {
                     'repository': REPO, 'ticket': 7, 'skill': skill, 'harness': 'claude', 'model': 'claude-opus-5-5'}}])
                 self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'}}})
+                self.assertEqual(p.labels(), {'repo': REPO, 'requesters': {'7': {
+                    'host': 'local', 'requester': who, 'run': 'local-run-7'}}})
 
     def test_start_without_a_skill_sends_todays_exact_bytes(self):
         p = Project(self)
@@ -474,6 +487,78 @@ class Token(unittest.TestCase):
             ['owner key', 'owner key']))
         self.assertEqual(self.requests(p), [])
         self.assertFalse((p.dir / 'token-private').exists())
+
+
+    def test_each_skill_started_without_a_roster_asks_for_its_own_role_at_the_same_scope(self):
+        p = Project(self)
+        env = self.service(p)
+        for n, skill in ((7, 'build-ticket'), (8, 'review-ticket'), (9, 'launch-fleet'), (10, 'grill')):
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', skill, **env),
+                             (0, 'started #%s on local' % n, ''))
+        for held in (p.dir / 'token-private').iterdir():
+            held.unlink()
+        for n in (7, 8, 9, 10):
+            self.assertEqual(p.host('wake', REPO, n, **env), (0, 'woke #%s on local' % n, ''))
+        wanted = ['builder-7', 'reviewer-8', 'fleet-9', 'builder-10']
+        self.assertEqual([r['request'] for r in self.requests(p)],
+                         [{'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': who,
+                           'repositories': [REPO], 'permissions': WRITE} for who in wanted * 2])
+        folder = p.runs.parent / 'agent-token-bin'
+        expected = {}
+        for who in wanted:
+            role, ticket = who.rsplit('-', 1)
+            for name in ('gh', 'git'):
+                expected[f'{role}/{REPO}-{ticket}/{name}'] = [who]
+        self.assertEqual({path.relative_to(folder).as_posix(): re.findall(r'--requester (\S+)', path.read_text())
+                          for path in folder.rglob('*') if path.is_file()}, expected)
+
+
+    def test_the_run_map_keeps_the_shape_an_older_host_reads_beside_a_reviewer_and_a_fleet(self):
+        p = Project(self)
+        env = self.service(p)
+        for n, skill in ((7, 'build-ticket'), (8, 'review-ticket'), (9, 'launch-fleet')):
+            self.assertEqual(p.host('start', REPO, n, 'claude', 'claude-opus-5-5', skill, **env),
+                             (0, 'started #%s on local' % n, ''))
+        runs = p.saved()['runs']
+        self.assertEqual(runs, {n: {'host': 'local', 'run': 'local-run-%s' % n} for n in ('7', '8', '9')})
+        older = {'host', 'run'}, {'host', 'run', 'stopped'}
+        self.assertTrue(all(set(v) in older for v in runs.values()))
+        self.assertEqual(p.host('stop', REPO, 7, **env), (0, 'stopped #7 on local', ''))
+        self.assertEqual(p.saved()['runs']['7'], {'host': 'local', 'run': 'local-run-7', 'stopped': True})
+        self.assertEqual(sorted(p.labels()['requesters']), ['8', '9'])
+
+    def test_a_label_for_another_run_is_ignored_and_a_restart_as_a_builder_drops_it(self):
+        p = Project(self)
+        env = self.service(p)
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'claude-opus-5-5', 'review-ticket', **env),
+                         (0, 'started #8 on local', ''))
+        p.runs.write_text(json.dumps({'repo': REPO, 'runs': {'8': {'host': 'local', 'run': 'older-host-run'}}}))
+        self.assertEqual(p.host('wake', REPO, 8, **env), (0, 'woke #8 on local', ''))
+        self.assertEqual(self.requests(p)[-1]['request']['requester'], 'builder-8')
+        self.assertEqual(p.host('stop', REPO, 8, **env), (0, 'stopped #8 on local', ''))
+        self.assertEqual(p.host('start', REPO, 8, 'claude', 'claude-opus-5-5', **env), (0, 'started #8 on local', ''))
+        self.assertEqual(p.labels(), {'repo': REPO, 'requesters': {}})
+
+    def test_a_label_for_another_ticket_or_role_is_an_unreadable_requesters_file(self):
+        for label in ({'requester': 'fleet-8'}, {'requester': 'builder-7'}, {'requester': 'reviewer-7', 'role': 'x'}):
+            with self.subTest(label):
+                p = Project(self)
+                p.runs.write_text(json.dumps({'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'}}}))
+                Path(str(p.runs) + '.requesters').write_text(json.dumps({'repo': REPO, 'requesters': {
+                    '7': dict({'host': 'local', 'run': 'local-run-7'}, **label)}}))
+                code, out, err = p.host('wake', REPO, 7, **self.service(p))
+                self.assertEqual((code, out, p.calls(), self.requests(p)), (2, '', [], []))
+                self.assertIn('is not a requesters file for %s' % REPO, err)
+
+
+class Version(unittest.TestCase):
+    def test_the_installed_version_reads_plain_or_quoted(self):
+        for line in ('version: 0.2.0', 'version: "0.2.0"', "version: '0.2.0'"):
+            with self.subTest(line):
+                self.assertEqual(front_version('---\nname: launch-fleet\n%s\n---\n' % line), '0.2.0')
+        for line in ('version: "0.2.0\'', 'version: 0.2', 'name: launch-fleet'):
+            with self.subTest(line):
+                self.assertIsNone(front_version('---\n%s\n---\n' % line))
 
 
 class Failures(unittest.TestCase):
@@ -799,7 +884,7 @@ class Roster(unittest.TestCase):
         self.assertNotIn('synthetic-owner', json.dumps([requests, p.calls()]))
         self.assertEqual(Token().exposed(p, *started[1:], *woke[1:]), [])
 
-    def test_with_no_roster_starts_are_exactly_as_today(self):
+    def test_with_no_roster_starts_are_as_today_but_for_the_token_role(self):
         p = Project(self)
         p.fleet((ROSTER / 'no-roster/fleet.md').read_text())
         env = Token().service(p)
@@ -811,11 +896,11 @@ class Roster(unittest.TestCase):
                          (0, 'started #8 on local', ''))
         self.assertEqual(p.saved(), {'repo': REPO, 'runs': {'7': {'host': 'local', 'run': 'local-run-7'},
                                                             '8': {'host': 'local', 'run': 'local-run-8'}}})
-        self.assertEqual([r['request']['requester'] for r in Token().requests(p)], ['builder-7', 'builder-8'])
+        self.assertEqual([r['request']['requester'] for r in Token().requests(p)], ['reviewer-7', 'builder-8'])
         for held in (p.dir / 'token-private').iterdir():
             held.unlink()
         self.assertEqual(p.host('wake', REPO, 7, **env), (0, 'woke #7 on local', ''))
-        self.assertEqual([r['request']['requester'] for r in Token().requests(p)][-1], 'builder-7')
+        self.assertEqual([r['request']['requester'] for r in Token().requests(p)][-1], 'reviewer-7')
 
 
     def shims(self, p):

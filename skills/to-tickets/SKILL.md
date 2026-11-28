@@ -40,16 +40,15 @@ that range is `Size: S.` (this revises openwizdev/OpenWiz#2484's RR2, which set
 about 400). An M is about 400. Size M is allowed only with a
 `Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
 never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
-refuses an L, and an M without that line. Cut for the shortest critical chain,
-then the widest graph (F6): disjoint
-owned paths and only the arrows a ticket truly needs. To choose between two
-cuts, write each as picture data and run
+refuses an L, and an M without that line. Cut flat (F6): the shortest critical
+chain, then the widest graph; disjoint owned paths; only the arrows a ticket
+truly needs. A ticket that needs only another's interface waits on a
+contract-first ticket; ordering never justifies an arrow. Step 4 needs a spec
+`Why deep:` line for a chain over 5, or over 3 and over 2/3 of the open tickets.
+Compare cuts as picture data with
 `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps
-the shorter critical chain, and the wider graph when the chains are equal.
-Use a contract-first ticket for a shared interface, or say why none is needed.
-Ask yourself the owner's old questions: is each ticket the right size, is each
-arrow right, what should merge or split. The checks in
-step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
+the shorter chain, then the wider graph. Ask of each ticket: right size, merge
+or split? See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 

@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openwiz:schema:state-model:v1",
+  "title": "openwiz.state-model.v1",
+  "type": "object",
+  "required": ["schema", "machine", "sources", "variables", "init", "actions", "invariants", "bound"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "openwiz.state-model.v1" },
+    "machine": { "$ref": "#/$defs/text" },
+    "sources": { "$ref": "#/$defs/sources" },
+    "variables": { "type": "object", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/domain" } },
+    "init": { "$ref": "#/$defs/state" },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "invariants": { "$ref": "#/$defs/predicates" },
+    "progress": { "$ref": "#/$defs/predicates" },
+    "final": { "$ref": "#/$defs/expression" },
+    "bound": { "$ref": "#/$defs/positive" }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_-]*(?![\\s\\S])" },
+    "variableName": { "$ref": "#/$defs/name" },
+    "file": { "type": "string", "pattern": "^(?:(?!\\.{1,2}/)[A-Za-z0-9_.-]+/)*(?!\\.{1,2}(?![\\s\\S]))[A-Za-z0-9_.-]+(?![\\s\\S])" },
+    "integer": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+    "positive": { "$ref": "#/$defs/integer", "minimum": 1 },
+    "items": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/text" } },
+    "sources": {
+      "type": "object", "required": ["commit", "files"], "additionalProperties": false,
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}(?![\\s\\S])" },
+        "files": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/file" } }
+      }
+    },
+    "domain": {
+      "anyOf": [
+        {
+          "type": "object", "required": ["type", "values"], "additionalProperties": false,
+          "properties": { "type": { "const": "enum" }, "values": { "$ref": "#/$defs/items", "minItems": 1 } }
+        },
+        {
+          "type": "object", "required": ["type", "min", "max"], "additionalProperties": false,
+          "properties": { "type": { "const": "int" }, "min": { "$ref": "#/$defs/integer" }, "max": { "$ref": "#/$defs/integer" } }
+        },
+        {
+          "type": "object", "required": ["type", "items", "maxSize"], "additionalProperties": false,
+          "properties": {
+            "type": { "const": "set" }, "items": { "$ref": "#/$defs/items" },
+            "maxSize": { "$ref": "#/$defs/integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "stateValue": { "anyOf": [{ "$ref": "#/$defs/text" }, { "$ref": "#/$defs/integer" }, { "$ref": "#/$defs/items" }] },
+    "state": {
+      "type": "object", "propertyNames": { "$ref": "#/$defs/variableName" },
+      "additionalProperties": { "$ref": "#/$defs/stateValue" }
+    },
+    "term": {
+      "anyOf": [
+        { "$ref": "#/$defs/stateValue" },
+        {
+          "type": "object", "required": ["var"], "additionalProperties": false,
+          "properties": { "var": { "$ref": "#/$defs/variableName" } }
+        }
+      ]
+    },
+    "expression": {
+      "anyOf": [
+        { "type": "boolean" },
+        {
+          "type": "object", "required": ["op", "args"], "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["eq", "ne", "lt", "le", "gt", "ge", "in"] },
+            "args": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/term" } }
+          }
+        },
+        {
+          "type": "object", "required": ["op", "args"], "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["and", "or"] },
+            "args": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/expression" } }
+          }
+        },
+        {
+          "type": "object", "required": ["op", "args"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "not" },
+            "args": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "$ref": "#/$defs/expression" } }
+          }
+        }
+      ]
+    },
+    "update": {
+      "anyOf": [
+        {
+          "type": "object", "required": ["op", "var", "value"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "assign" }, "var": { "$ref": "#/$defs/variableName" }, "value": { "$ref": "#/$defs/term" }
+          }
+        },
+        {
+          "type": "object", "required": ["op", "var", "item"], "additionalProperties": false,
+          "properties": {
+            "op": { "enum": ["add", "remove"] }, "var": { "$ref": "#/$defs/variableName" }, "item": { "$ref": "#/$defs/text" }
+          }
+        }
+      ]
+    },
+    "cite": {
+      "type": "object", "required": ["file", "start", "end"], "additionalProperties": false,
+      "properties": { "file": { "$ref": "#/$defs/file" }, "start": { "$ref": "#/$defs/positive" }, "end": { "$ref": "#/$defs/positive" } }
+    },
+    "action": {
+      "type": "object", "required": ["name", "guard", "effect", "cites"], "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/name" }, "guard": { "$ref": "#/$defs/expression" },
+        "effect": { "type": "array", "items": { "$ref": "#/$defs/update" } },
+        "cites": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/cite" } }
+      }
+    },
+    "predicates": {
+      "type": "object", "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/expression" }
+    },
+    "trace": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["action", "state"], "additionalProperties": false,
+        "properties": { "action": { "$ref": "#/$defs/name" }, "state": { "$ref": "#/$defs/state" } }
+      }
+    },
+    "report": {
+      "anyOf": [
+        {
+          "type": "object", "required": ["status", "statesExplored"], "additionalProperties": false,
+          "properties": { "status": { "enum": ["ok", "bound-reached"] }, "statesExplored": { "$ref": "#/$defs/positive" } }
+        },
+        {
+          "type": "object", "required": ["status", "statesExplored", "kind", "name", "trace"], "additionalProperties": false,
+          "properties": {
+            "status": { "const": "counterexample" }, "statesExplored": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "invariant" }, "name": { "$ref": "#/$defs/name" }, "trace": { "$ref": "#/$defs/trace" }
+          }
+        },
+        {
+          "type": "object", "required": ["status", "statesExplored", "kind", "trace"], "additionalProperties": false,
+          "properties": {
+            "status": { "const": "counterexample" }, "statesExplored": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "stuck" }, "trace": { "$ref": "#/$defs/trace" }
+          }
+        },
+        {
+          "type": "object", "required": ["status", "statesExplored", "reason"], "additionalProperties": false,
+          "properties": {
+            "status": { "const": "invalid" }, "statesExplored": { "const": 0 },
+            "reason": { "enum": ["unreadable", "invalid-model", "unknown-expression", "unbounded-domain", "missing-cite", "unknown-variable"] }
+          }
+        }
+      ]
+    }
+  }
+}

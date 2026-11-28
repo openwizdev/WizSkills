@@ -1667,6 +1667,80 @@ class ReviewRules(unittest.TestCase):
         self.assertEqual(lines, ["report: style-only renames in tests"])
 
 
+class ReadOnlyCheckout(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.run_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo), str(self.run_dir)])
+        self.git("init", "-q")
+        (self.repo / "a.txt").write_text("a\n", encoding="utf-8")
+        (self.repo / "dirty.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+        (self.repo / "dirty.txt").write_text("already dirty\n", encoding="utf-8")
+        self.snap = self.run_dir / "checkout.json"
+        self.snapshot = self.helper("snapshot", str(self.snap))
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Reviewer", "-c",
+                               "user.email=r@example.com", *args], check=True, capture_output=True, text=True)
+
+    def helper(self, *args):
+        return subprocess.run([sys.executable, "-I", str(HELPER), *args], cwd=self.repo, text=True,
+                              capture_output=True, timeout=60)
+
+    def verify(self):
+        out = self.helper("verify", str(self.snap))
+        return out.returncode, out.stdout.strip(), out.stderr
+
+    def test_an_untouched_checkout_passes(self):
+        self.assertEqual((self.snapshot.returncode, self.snapshot.stdout.strip()), (0, "snapshot: ok"))
+        self.assertEqual(self.verify()[:2], (0, "verify: ok"))
+
+    def test_scratch_worktree_under_the_temp_folder_is_ignored(self):
+        scratch = self.run_dir / "undo"
+        self.git("worktree", "add", "-q", "--detach", str(scratch))
+        (scratch / "a.txt").write_text("undone\n", encoding="utf-8")
+        (scratch / "new.txt").write_text("scratch\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(scratch), "-c", "user.name=Reviewer", "-c", "user.email=r@example.com",
+                        "commit", "-qam", "undo"], check=True, capture_output=True)
+        self.assertEqual(self.verify()[:2], (0, "verify: ok"))
+
+    def test_an_edited_file_fails_and_is_named(self):
+        (self.repo / "a.txt").write_text("edited\n", encoding="utf-8")
+        (self.repo / "dirty.txt").write_text("edited again\n", encoding="utf-8")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: a.txt, dirty.txt"))
+
+    def test_a_new_untracked_file_fails_and_is_named(self):
+        (self.repo / "notes").mkdir()
+        (self.repo / "notes" / "fix.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: notes/fix.py"))
+
+    def test_a_new_commit_fails_and_names_its_files(self):
+        (self.repo / "a.txt").write_text("committed\n", encoding="utf-8")
+        self.git("commit", "-qm", "reviewer fix", "a.txt")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD, a.txt"))
+
+    def test_an_empty_commit_still_fails(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "empty")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD"))
+
+    def test_a_missing_or_broken_snapshot_refuses(self):
+        for bad in ("{", '{"top": "/tmp/x", "head": "--evil", "status": {}}',
+                    '{"top": "/tmp/x", "head": "' + "a" * 40 + '", "status": [], "extra": 1}'):
+            self.snap.write_text(bad, encoding="utf-8")
+            code, out, err = self.verify()
+            self.assertEqual((code, out), (2, ""))
+            self.assertTrue(err.startswith("refused: "), err)
+        self.snap.unlink()
+        self.assertEqual(self.verify()[0], 2)
+
+    def test_a_snapshot_inside_the_checkout_refuses(self):
+        out = self.helper("snapshot", str(self.repo / "snap.json"))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertFalse((self.repo / "snap.json").exists())
+
+
 def extract_backticks(text, pattern):
     return [match.group(1) for match in re.finditer(r"`([^`\n]+)`", text) if re.search(pattern, match.group(1))]
 

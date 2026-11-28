@@ -30,7 +30,7 @@ For a driver wake or start targeting `owner/repo#N` with `review-ticket`, `N` is
 
 Before pinning, check your role against the models in `docs/agents/fleet.md` (from the base branch): you are the right reviewer if first-choice, or a listed fallback after a recorded `launch-fleet: review refused <head>: <family> usage limit` comment on this PR; otherwise stop and post nothing (also if your thread built the PR). Name your model and effort in the verdict's first lines (e.g. `reviewer: Neon High`).
 
-`review.py pin` prints `review full #57 at <head>; ticket example/pantry#41; checks build, test`, or `stop: <why>` (post nothing and say why). Re-checks add `last read <commit>; open <ids>; next id R<k>` (see Re-checks). Check out only that head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Read the ticket, parent spec (`gh issue view <n> --repo <ticket repo> --json title,body,comments,parent`) and any named grill or contract.
+On `review.py pin`'s `stop: <why>`, say why and post nothing. Re-checks add `last read <commit>; open <ids>; next id R<k>`. Fetch and detach at the pinned head (`git fetch origin <base> pull/<N>/head`, `git checkout --detach <head>`). Run `review.py snapshot <snapshot>` before the diff. Keep the snapshot and scratch worktrees in the run's temp folder. Read the ticket, parent spec and named grill or contract.
 
 Done when you hold one green head and have read its ticket and spec.
 
@@ -85,7 +85,7 @@ When a finding turns on a fact no reading or run can settle, comment on the tick
 
 1. **File each new polish finding:** `review.py follow-up --repo <ticket repo> --ticket <n> --spec <spec> --pr <owner/repo#N> --head <head> --id R<k> --title "<short claim>" --finding <file>` prints `filed #<issue>` or `already filed #<issue>`.
 2. **Write the report** to a file, as below. `review.py check <file>` prints `report ok` or each broken line; fix until ok.
-3. **Post it:** `review.py post <file>` admits the head, checks the report again, posts it as the App and prints `posted <id>` or `already posted <id>`. On `unknown: ...`, read the comments before anything else; never post blindly.
+3. **Post it:** Require `review.py verify <snapshot>` to print `verify: ok`. Report any change, undo your work and verify again. `review.py post <file>` rechecks and posts as the App (`posted <id>` or `already posted <id>`). On `unknown: ...`, read comments before retrying.
 
 Done when the helper printed `posted` or `already posted` for the pinned head.
 

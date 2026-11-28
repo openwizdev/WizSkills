@@ -1,7 +1,9 @@
 import argparse
 import base64
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -716,6 +718,8 @@ DESCRIPTION = (
     "  self-check DESCRIPTION [--base REF]       the builder's own pass on its checkout, before any review:\n"
     "                                            the description's form, one ## Self-check line per probe\n"
     "                                            (a `command` with what it printed, or n/a: <why>), no leaks\n"
+    '  snapshot FILE                             record HEAD and the working tree of this checkout in FILE\n'
+    '  verify FILE                               refuse when HEAD or the working tree moved since snapshot\n'
     '\n'
     'pin, check and post take --ticket OWNER/NAME#N for an explicitly assigned\n'
     "ticket, admitted only by an exact `Refs OWNER/NAME#N` line; without it a Closes line names it.\n"
@@ -728,6 +732,82 @@ DESCRIPTION = (
     'done, 1 a stop, report problems or an unknown write, 2 a refusal (unreadable\n'
     'or invalid settings, arguments). Python 3.11+ standard library and `gh`.\n'
 )
+
+
+def checkout_state():
+    top = Path(git("rev-parse", "--show-toplevel", what="reading the checkout").strip())
+    head = git("rev-parse", "HEAD", what="reading HEAD").strip()
+    records = git("-C", str(top), "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                  what="reading the working tree").split("\0")
+    status = {}
+    while records:
+        record = records.pop(0)
+        if not record:
+            continue
+        path = record[3:]
+        if record[0] in "RC" and records:
+            records.pop(0)
+        status[path] = [record[:2], content(top / path)]
+    return {"top": str(top), "head": head, "status": status}
+
+
+def content(path):
+    try:
+        if path.is_symlink():
+            return "link:" + os.readlink(path)
+        if path.is_file():
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as e:
+        raise Refusal(f"cannot read working-tree file ({type(e).__name__})")
+    return None
+
+
+def snapshot(path):
+    state = checkout_state()
+    target = Path(path).resolve()
+    if target.is_relative_to(Path(state["top"]).resolve()):
+        raise Refusal("the snapshot must live outside the checkout, in the run's temp folder")
+    try:
+        target.write_text(json.dumps(state), encoding="utf-8")
+    except OSError as e:
+        raise Refusal(f"cannot write the snapshot ({type(e).__name__})")
+    return "snapshot: ok"
+
+
+def load_snapshot(path):
+    try:
+        old = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise Refusal(f"cannot read the snapshot ({type(e).__name__}); take one with snapshot first")
+    if (not isinstance(old, dict) or set(old) != {"top", "head", "status"}
+            or not isinstance(old["top"], str) or not old["top"]
+            or not isinstance(old["head"], str) or not SHA.fullmatch(old["head"])
+            or not isinstance(old["status"], dict)
+            or not all(isinstance(k, str) and isinstance(v, list) and len(v) == 2
+                       and isinstance(v[0], str) and len(v[0]) == 2
+                       and (v[1] is None or isinstance(v[1], str))
+                       for k, v in old["status"].items())):
+        raise Refusal("cannot read the snapshot (invalid shape); take one with snapshot first")
+    return old["top"], old["head"], old["status"]
+
+
+def verify(path):
+    old_top, old_head, old_status = load_snapshot(path)
+    now = checkout_state()
+    if now["top"] != old_top:
+        raise Refusal("this is not the checkout the snapshot was taken in")
+    changed = []
+    if now["head"] != old_head:
+        changed.append("HEAD")
+        diff = git("-C", now["top"], "diff", "--name-only", "-z", old_head, now["head"],
+                   what="comparing HEAD with the snapshot")
+        changed += sorted(filter(None, diff.split("\0")))
+    for name in sorted(set(old_status) | set(now["status"])):
+        if old_status.get(name) != now["status"].get(name) and name not in changed:
+            changed.append(name)
+    if changed:
+        raise Stop("reviewer changed the checkout: " + ", ".join(changed))
+    return "verify: ok"
 
 
 def main(argv=None):
@@ -750,12 +830,18 @@ def main(argv=None):
     c = sub.add_parser("self-check")
     c.add_argument("description", help="the pull request description you will hand back, as a file")
     c.add_argument("--base", default="origin/main")
+    for name in ("snapshot", "verify"):
+        c = sub.add_parser(name, help=f"{name} the reviewer's checkout: HEAD and the working tree")
+        c.add_argument("file", help="the snapshot file, in the run's temp folder outside the checkout")
     r = sub.add_parser("rules")
     r.add_argument("--base", default="origin/main")
     r.add_argument("--head", default="HEAD")
     r.add_argument("--finding", action="append", default=[], help="a candidate finding's class; repeat")
     a = p.parse_args(argv)
     try:
+        if a.command in ("snapshot", "verify"):
+            print((snapshot if a.command == "snapshot" else verify)(a.file))
+            return 0
         if a.command == "self-check":
             lines = self_check(a.description, a.base)
             print("\n".join(lines))

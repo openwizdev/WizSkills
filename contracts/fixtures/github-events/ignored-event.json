@@ -1,0 +1,22 @@
+{
+  "closing_tickets": {},
+  "parents": {},
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "ping",
+        "X-GitHub-Delivery": "example-ignored-event"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "zen": "Example webhook ping"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18018": "example-org/example-repo#82"
+  },
+  "secret_configured": true,
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-bad-signature",
+        "X-Hub-Signature-256": "sha256=0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18018
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 2,
+        "stdout": []
+      }
+    },
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-bad-signature"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18018
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 2,
+        "stdout": []
+      }
+    },
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-bad-signature"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18018
+        },
+        "action": "labeled"
+      },
+      "sign_body": true,
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 82"
+        ]
+      }
+    }
+  ]
+}

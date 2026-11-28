@@ -1,0 +1,29 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18011": "example-org/example-repo#1008"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-issue-unlabeled"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18011
+        },
+        "action": "unlabeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    }
+  ]
+}

@@ -38,6 +38,7 @@ STEP_PHASES = (('changeset gate', 'Changeset gate'), ('comment check', 'Comment 
                ('browser tools', 'Install pinned test-only browser tools'))
 RUN_PY = '##[group]Run python3 check/run.py'
 TIMED = re.compile(r' in \d+(?:\.\d+)?s$')
+RULES_END = re.compile(r'rules: (?:pass|fail \([0-9]+\))')
 FIXED = ('queue wait', 'setup', 'changeset gate', 'comment check', 'browser tools', 'rules', 'standalone')
 
 
@@ -76,7 +77,7 @@ def job_phases(job, log):
     for at, text in log_lines(log):
         if text.startswith(RUN_PY):
             started = at
-        elif text.startswith('rules: ') and started:
+        elif started and RULES_END.fullmatch(text):
             rules_at = at
             out['rules'] = seconds(started, at)
         elif text.startswith('standalone: ') and rules_at:

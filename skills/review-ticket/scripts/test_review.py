@@ -1667,5 +1667,321 @@ class ReviewRules(unittest.TestCase):
         self.assertEqual(lines, ["report: style-only renames in tests"])
 
 
+class ReadOnlyCheckout(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp())
+        self.run_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.repo), str(self.run_dir)])
+        self.git("init", "-q")
+        (self.repo / "a.txt").write_text("a\n", encoding="utf-8")
+        (self.repo / "dirty.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base")
+        (self.repo / "dirty.txt").write_text("already dirty\n", encoding="utf-8")
+        self.snap = self.run_dir / "checkout.json"
+        self.snapshot = self.helper("snapshot", str(self.snap))
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=Reviewer", "-c",
+                               "user.email=r@example.com", *args], check=True, capture_output=True, text=True)
+
+    def helper(self, *args):
+        return subprocess.run([sys.executable, "-I", str(HELPER), *args], cwd=self.repo, text=True,
+                              capture_output=True, timeout=60)
+
+    def verify(self):
+        out = self.helper("verify", str(self.snap))
+        return out.returncode, out.stdout.strip(), out.stderr
+
+    def test_an_untouched_checkout_passes(self):
+        self.assertEqual((self.snapshot.returncode, self.snapshot.stdout.strip()), (0, "snapshot: ok"))
+        self.assertEqual(self.verify()[:2], (0, "verify: ok"))
+
+    def test_scratch_worktree_under_the_temp_folder_is_ignored(self):
+        scratch = self.run_dir / "undo"
+        self.git("worktree", "add", "-q", "--detach", str(scratch))
+        (scratch / "a.txt").write_text("undone\n", encoding="utf-8")
+        (scratch / "new.txt").write_text("scratch\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(scratch), "-c", "user.name=Reviewer", "-c", "user.email=r@example.com",
+                        "commit", "-qam", "undo"], check=True, capture_output=True)
+        self.assertEqual(self.verify()[:2], (0, "verify: ok"))
+
+    def test_an_edited_file_fails_and_is_named(self):
+        (self.repo / "a.txt").write_text("edited\n", encoding="utf-8")
+        (self.repo / "dirty.txt").write_text("edited again\n", encoding="utf-8")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: a.txt, dirty.txt"))
+
+    def test_a_new_untracked_file_fails_and_is_named(self):
+        (self.repo / "notes").mkdir()
+        (self.repo / "notes" / "fix.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: notes/fix.py"))
+
+    def test_a_new_commit_fails_and_names_its_files(self):
+        (self.repo / "a.txt").write_text("committed\n", encoding="utf-8")
+        self.git("commit", "-qm", "reviewer fix", "a.txt")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD, a.txt"))
+
+    def test_an_empty_commit_still_fails(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "empty")
+        self.assertEqual(self.verify()[:2], (1, "reviewer changed the checkout: HEAD"))
+
+    def test_a_missing_or_broken_snapshot_refuses(self):
+        for bad in ("{", '{"top": "/tmp/x", "head": "--evil", "status": {}}',
+                    '{"top": "/tmp/x", "head": "' + "a" * 40 + '", "status": [], "extra": 1}'):
+            self.snap.write_text(bad, encoding="utf-8")
+            code, out, err = self.verify()
+            self.assertEqual((code, out), (2, ""))
+            self.assertTrue(err.startswith("refused: "), err)
+        self.snap.unlink()
+        self.assertEqual(self.verify()[0], 2)
+
+    def test_a_snapshot_inside_the_checkout_refuses(self):
+        out = self.helper("snapshot", str(self.repo / "snap.json"))
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertFalse((self.repo / "snap.json").exists())
+
+
+def extract_backticks(text, pattern):
+    return [match.group(1) for match in re.finditer(r"`([^`\n]+)`", text) if re.search(pattern, match.group(1))]
+
+
+def extract_backtick(text, pattern):
+    matches = extract_backticks(text, pattern)
+    return matches[0] if matches else None
+
+
+def instruction_source_errors(text):
+    errors = []
+    if re.search(r"\bHEAD:", text):
+        errors.append("reads from HEAD:")
+    if "git show origin/<base>:<path>" not in text:
+        errors.append("missing git show origin/<base>:<path>")
+    para = next((p for p in text.split("\n\n") if "git show origin/<base>:<path>" in p), "")
+    for name in ("AGENTS.md", "CLAUDE.md", "docs/agents/fleet.md"):
+        if name not in para:
+            errors.append(f"base-branch instruction rule omits {name}")
+    if "outside the reviewed checkout" not in text:
+        errors.append("tooling not pinned outside the reviewed checkout")
+    if not extract_backtick(text, r"worktree add --detach \"\$base_tree\" origin/<base>"):
+        errors.append("missing clean fetched-base worktree setup")
+    context_cmds = extract_backticks(text, r"\$C reviewer\b")
+    if not context_cmds or any("$base_tree" not in cmd for cmd in context_cmds):
+        errors.append("context command not pinned to clean fetched-base worktree")
+    check_cmds = extract_backticks(text, r"\$C check\b")
+    if not check_cmds or any("$base_tree" not in cmd for cmd in check_cmds):
+        errors.append("public-write check not pinned to clean fetched-base worktree")
+    return errors
+
+
+class InstructionSources(unittest.TestCase):
+
+    CONTEXT_HELPER = HELPER.parents[2] / "launch-fleet" / "scripts" / "context.py"
+
+    def git(self, repo, *args):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        return subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.com",
+             "-c", "core.hooksPath=/dev/null", *args],
+            check=True, capture_output=True, text=True, env=env,
+        ).stdout.strip()
+
+    def write_files(self, root, files):
+        for rel, content in files.items():
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+    def run_skill_sh(self, cwd, command, env):
+        return subprocess.run(["/bin/sh", "-c", command], cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+
+    def test_skill_reads_instruction_files_from_base_branch_not_head(self):
+        skill = (HELPER.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(instruction_source_errors(skill), [])
+        for bad in (
+            skill + "\nRead `AGENTS.md` with `git rev-parse HEAD:<path>`.\n",
+            skill.replace("origin/<base>:<path>", "HEAD:<path>"),
+            skill + "\nCheck `git show HEAD:AGENTS.md`.\n",
+        ):
+            self.assertIn("reads from HEAD:", instruction_source_errors(bad))
+
+    def test_review_workflow_enforces_fetched_base_provenance_for_instructions_context_and_privacy(self):
+        skill = (HELPER.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+        setup_cmd = extract_backtick(skill, r"worktree add --detach \"\$base_tree\" origin/<base>")
+        show_cmd = extract_backtick(skill, r"git show origin/<base>:<path>")
+        context_cmd = extract_backtick(skill, r"\$C reviewer\b")
+        check_cmd = extract_backtick(skill, r"\$C check\b")
+        self.assertIsNotNone(show_cmd, "SKILL.md missing git show command")
+        self.assertIsNotNone(context_cmd, "SKILL.md missing $C reviewer command")
+        self.assertIsNotNone(check_cmd, "SKILL.md missing $C check command")
+
+        base_fleet = (
+            "# Fleet settings\n\n"
+            "## Models\n\n| Role | Model |\n| --- | --- |\n| Reviewer | BaseModel |\n\n"
+            "## Supporting edits\n\nBase supporting rule.\n\n"
+            "## Test commands\n\nBase test command.\n\n"
+            "## CI checks\n\nBase CI checks.\n\n"
+            "## Approval rules\n\nBase approval rules.\n"
+        )
+        base_card = "# Public writes\n\nBase public-writes card.\n"
+        base_checker = (
+            "import argparse\n"
+            "from pathlib import Path\n"
+            "p = argparse.ArgumentParser()\n"
+            "p.add_argument('--title-file', type=Path, required=True)\n"
+            "p.add_argument('--body-file', type=Path, required=True)\n"
+            "a = p.parse_args()\n"
+            "if 'BASE_PRIVACY_TRIGGER' in a.body_file.read_text(encoding='utf-8'):\n"
+            "    print('T3 pr-body:1')\n"
+            "    raise SystemExit(1)\n"
+            "raise SystemExit(0)\n"
+        )
+
+        for with_base_checker in (True, False):
+            with self.subTest(with_base_checker=with_base_checker), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                bare = root / "origin.git"
+                checkout = root / "checkout"
+                base_tree = root / "base-tree"
+                pr_marker = root / "pr-checker-ran"
+                hook_marker = root / "pr-hook-ran"
+
+                subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True)
+                subprocess.run(["git", "clone", "-q", str(bare), str(checkout)], check=True)
+
+                stale_files = {
+                    "AGENTS.md": "STALE_BASE_AGENTS\n",
+                    "CLAUDE.md": "STALE_BASE_CLAUDE\n",
+                    "sub/CLAUDE.md": "STALE_BASE_SUB_CLAUDE\n",
+                    "docs/agents/fleet.md": base_fleet.replace("BaseModel", "StaleLocalBaseModel"),
+                    "docs/agents/public-writes.md": "# Public writes\n\nStale local card.\n",
+                    "GLOSSARY.md": "# Glossary\n",
+                }
+                self.write_files(checkout, stale_files)
+                self.git(checkout, "add", "-A")
+                self.git(checkout, "commit", "-qm", "stale-base")
+                stale_sha = self.git(checkout, "rev-parse", "HEAD")
+
+                base_files = {
+                    "AGENTS.md": "BASE_AGENTS_INSTRUCTIONS\n",
+                    "CLAUDE.md": "BASE_ROOT_CLAUDE\n",
+                    "sub/CLAUDE.md": "BASE_SUB_CLAUDE\n",
+                    "docs/agents/fleet.md": base_fleet,
+                    "docs/agents/public-writes.md": base_card,
+                    "GLOSSARY.md": "# Glossary\n",
+                }
+                if with_base_checker:
+                    base_files["tools/privacy-check/check.py"] = base_checker
+                self.write_files(checkout, base_files)
+                self.git(checkout, "add", "-A")
+                self.git(checkout, "commit", "-qm", "base")
+                self.git(checkout, "push", "-q", "origin", "main")
+                base_sha = self.git(checkout, "rev-parse", "origin/main")
+
+                self.git(checkout, "checkout", "-qb", "pr-branch")
+                pr_checker = (
+                    "from pathlib import Path\n"
+                    f"Path({str(pr_marker)!r}).write_text('pwned', encoding='utf-8')\n"
+                    "raise SystemExit(0)\n"
+                )
+                pr_hook = f"#!/bin/sh\necho pwned > {shlex.quote(str(hook_marker))}\n"
+                self.write_files(checkout, {
+                    "AGENTS.md": "PR_POISONED_AGENTS\n",
+                    "CLAUDE.md": "PR_POISONED_ROOT_CLAUDE\n",
+                    "sub/CLAUDE.md": "PR_POISONED_SUB_CLAUDE\n",
+                    "docs/agents/fleet.md": base_fleet.replace("BaseModel", "PRPoisonedModel"),
+                    "docs/agents/public-writes.md": "# Public writes\n\nPR_POISONED_CARD\n",
+                    "tools/privacy-check/check.py": pr_checker,
+                    ".githooks/post-checkout": pr_hook,
+                })
+                (checkout / ".githooks/post-checkout").chmod(0o755)
+                self.git(checkout, "add", "-A")
+                self.git(checkout, "commit", "-qm", "pr")
+                pr_sha = self.git(checkout, "rev-parse", "HEAD")
+                self.git(checkout, "push", "-q", "origin", "HEAD:refs/pull/42/head")
+                self.git(checkout, "checkout", "-q", "main")
+                self.git(checkout, "branch", "-D", "pr-branch")
+                self.git(checkout, "reset", "--hard", stale_sha)
+                self.git(checkout, "update-ref", "refs/remotes/origin/main", stale_sha)
+                self.git(checkout, "config", "core.hooksPath", ".githooks")
+
+                self.write_files(checkout, {
+                    "docs/agents/fleet.md": base_fleet.replace("BaseModel", "UNSAVED_LOCAL_DRAFT"),
+                    "docs/agents/public-writes.md": "# Public writes\n\nUNSAVED_LOCAL_CARD\n",
+                    "tools/privacy-check/check.py": pr_checker,
+                    ".githooks/post-checkout": pr_hook,
+                })
+                (checkout / ".githooks/post-checkout").chmod(0o755)
+
+                base_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+                env = {
+                    **base_env,
+                    "TMPDIR": str(root),
+                    "C": f"{shlex.quote(sys.executable)} -I {shlex.quote(str(self.CONTEXT_HELPER))}",
+                    "base_tree": str(base_tree),
+                }
+
+                if setup_cmd:
+                    setup_script = setup_cmd.replace("<base>", "main") + '\nprintf "\\n%s\\n" "$base_tree"'
+                    setup = self.run_skill_sh(checkout, setup_script, env)
+                    self.assertEqual(setup.returncode, 0, setup.stdout + setup.stderr)
+                    base_tree = Path(setup.stdout.splitlines()[-1])
+                    env["base_tree"] = str(base_tree)
+                    self.assertEqual(self.git(base_tree, "rev-parse", "HEAD"), base_sha)
+                    self.assertFalse(hook_marker.exists(), "worktree setup ran a hook")
+
+                ctx = self.run_skill_sh(checkout, context_cmd, env)
+                self.assertEqual(ctx.returncode, 0, ctx.stdout + ctx.stderr)
+                self.assertIn("BaseModel", ctx.stdout)
+                self.assertIn("Base public-writes card.", ctx.stdout)
+                self.assertNotIn("StaleLocalBaseModel", ctx.stdout)
+                self.assertNotIn("UNSAVED_LOCAL_DRAFT", ctx.stdout)
+                self.assertNotIn("UNSAVED_LOCAL_CARD", ctx.stdout)
+                self.assertNotIn("PRPoisonedModel", ctx.stdout)
+                expected_fleet_blob = self.git(checkout, "rev-parse", "origin/main:docs/agents/fleet.md")
+                expected_card_blob = self.git(checkout, "rev-parse", "origin/main:docs/agents/public-writes.md")
+                self.assertIn(f"docs/agents/fleet.md {expected_fleet_blob}", ctx.stdout)
+                self.assertIn(f"docs/agents/public-writes.md {expected_card_blob}", ctx.stdout)
+
+                self.git(checkout, "checkout", "--force", "--detach", pr_sha)
+
+                for rel, expected in (
+                    ("AGENTS.md", "BASE_AGENTS_INSTRUCTIONS\n"),
+                    ("CLAUDE.md", "BASE_ROOT_CLAUDE\n"),
+                    ("sub/CLAUDE.md", "BASE_SUB_CLAUDE\n"),
+                    ("docs/agents/fleet.md", base_fleet),
+                ):
+                    cmd = show_cmd.replace("<base>", "main").replace("<path>", rel)
+                    shown = self.run_skill_sh(checkout, cmd, env)
+                    self.assertEqual(shown.returncode, 0, shown.stderr)
+                    self.assertEqual(shown.stdout, expected)
+
+                ctx_after = self.run_skill_sh(checkout, context_cmd, env)
+                self.assertEqual(ctx_after.returncode, 0, ctx_after.stdout + ctx_after.stderr)
+                self.assertIn("BaseModel", ctx_after.stdout)
+                self.assertNotIn("PRPoisonedModel", ctx_after.stdout)
+                self.assertNotIn("PR_POISONED_CARD", ctx_after.stdout)
+
+                clean_report = root / "clean.md"
+                clean_report.write_text("VERDICT: APPROVE\n\nSynthetic clean report.\n", encoding="utf-8")
+                bad_report = root / "bad.md"
+                bad_report.write_text(
+                    "BASE_PRIVACY_TRIGGER\n" if with_base_checker else "thr_" + "planted1\n",
+                    encoding="utf-8",
+                )
+
+                for report_path, expected_code, expected_text in (
+                    (clean_report, 0, "check: ok"),
+                    (bad_report, 1, "project privacy check T3" if with_base_checker else "thread id"),
+                ):
+                    cmd = re.sub(r"<[^>]+>", shlex.quote(str(report_path)), check_cmd)
+                    checked = self.run_skill_sh(checkout, cmd, env)
+                    self.assertEqual(checked.returncode, expected_code, checked.stdout + checked.stderr)
+                    self.assertIn(expected_text, checked.stdout)
+                    self.assertFalse(pr_marker.exists(), "PR checkout privacy checker ran")
+
+                if setup_cmd and base_tree.exists():
+                    self.git(checkout, "worktree", "remove", "--force", str(base_tree))
+
+
 if __name__ == "__main__":
     unittest.main()

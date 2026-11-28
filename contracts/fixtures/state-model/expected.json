@@ -1,0 +1,98 @@
+{
+  "ok": {
+    "exit": 0,
+    "report": {
+      "status": "ok",
+      "statesExplored": 3
+    }
+  },
+  "broken-invariant": {
+    "exit": 1,
+    "report": {
+      "status": "counterexample",
+      "statesExplored": 3,
+      "kind": "invariant",
+      "name": "intact",
+      "trace": [
+        {
+          "action": "direct",
+          "state": {
+            "phase": "broken"
+          }
+        }
+      ]
+    }
+  },
+  "stuck": {
+    "exit": 1,
+    "report": {
+      "status": "counterexample",
+      "statesExplored": 2,
+      "kind": "stuck",
+      "trace": [
+        {
+          "action": "jam",
+          "state": {
+            "phase": "jammed"
+          }
+        }
+      ]
+    }
+  },
+  "bound-reached": {
+    "exit": 3,
+    "report": {
+      "status": "bound-reached",
+      "statesExplored": 1
+    }
+  },
+  "invalid-unknown-expression": {
+    "exit": 2,
+    "report": {
+      "status": "invalid",
+      "statesExplored": 0,
+      "reason": "unknown-expression"
+    }
+  },
+  "invalid-unbounded-domain": {
+    "exit": 2,
+    "report": {
+      "status": "invalid",
+      "statesExplored": 0,
+      "reason": "unbounded-domain"
+    }
+  },
+  "invalid-missing-cite": {
+    "exit": 2,
+    "report": {
+      "status": "invalid",
+      "statesExplored": 0,
+      "reason": "missing-cite"
+    }
+  },
+  "invalid-unknown-variable": {
+    "exit": 2,
+    "report": {
+      "status": "invalid",
+      "statesExplored": 0,
+      "reason": "unknown-variable"
+    }
+  },
+  "progress-blocked": {
+    "exit": 1,
+    "report": {
+      "status": "counterexample",
+      "statesExplored": 3,
+      "kind": "invariant",
+      "name": "can-finish",
+      "trace": [
+        {
+          "action": "divert",
+          "state": {
+            "phase": "loop"
+          }
+        }
+      ]
+    }
+  }
+}

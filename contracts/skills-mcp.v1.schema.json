@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:openwiz:schema:skills-roles:v1",
+  "title": "openwiz.skills-roles.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "roles"],
+  "properties": {
+    "contract": {"const": "openwiz.skills-roles.v1"},
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orchestrator": {"$ref": "#/$defs/skills"},
+        "builder": {"$ref": "#/$defs/skills"},
+        "reviewer": {"$ref": "#/$defs/skills"},
+        "helper": {"$ref": "#/$defs/skills"}
+      }
+    }
+  },
+  "$defs": {
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?![\\s\\S])"
+      }
+    }
+  }
+}

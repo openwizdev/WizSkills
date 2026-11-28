@@ -24,5 +24,6 @@ claude plugin install openwiz@wizskills --scope project
 - [`where-are-we`](skills/where-are-we/SKILL.md): tells you where things stand.
 
 All skills and how to check a change: [skills/README.md](skills/README.md).
+Serve skills over MCP from any MCP-speaking client: [mcp/README.md](mcp/README.md).
 
 [Releases](docs/versions.md) · [Changelog](CHANGELOG.md) · [openwiz.dev](https://openwiz.dev) · [Apache-2.0](LICENSE) · [NOTICE](NOTICE)

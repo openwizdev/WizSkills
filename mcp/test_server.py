@@ -61,8 +61,17 @@ class StdioClient:
         self.proc.stdin.close()
         remaining = self.proc.stdout.read()
         stderr = self.proc.stderr.read().decode("utf-8", errors="replace")
+        self.proc.stdout.close()
+        self.proc.stderr.close()
         code = self.proc.wait(timeout=10)
         return code, remaining, stderr
+
+    def terminate(self):
+        self.proc.kill()
+        for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        self.proc.wait(timeout=5)
 
 
 class SkillsMcpServerTest(unittest.TestCase):
@@ -90,8 +99,7 @@ class SkillsMcpServerTest(unittest.TestCase):
                         self.run_steps(client, case["steps"])
                         code, remaining, stderr = client.close()
                     except Exception:
-                        client.proc.kill()
-                        client.proc.wait(timeout=5)
+                        client.terminate()
                         raise
                     self.assertEqual(code, 0, stderr)
                     self.assertEqual(remaining, b"")
@@ -158,8 +166,7 @@ class SkillsMcpServerTest(unittest.TestCase):
             )
             code, remaining, stderr = client.close()
         except Exception:
-            client.proc.kill()
-            client.proc.wait(timeout=5)
+            client.terminate()
             raise
         self.assertEqual(code, 0, stderr)
         self.assertEqual(remaining, b"")
@@ -235,8 +242,7 @@ class SkillsMcpServerTest(unittest.TestCase):
                 )
                 code, remaining, stderr = client.close()
             except Exception:
-                client.proc.kill()
-                client.proc.wait(timeout=5)
+                client.terminate()
                 raise
             self.assertEqual(code, 0, stderr)
             self.assertEqual(remaining, b"")
@@ -271,8 +277,7 @@ class SkillsMcpServerTest(unittest.TestCase):
                 )
                 code, remaining, stderr = client.close()
             except Exception:
-                client.proc.kill()
-                client.proc.wait(timeout=5)
+                client.terminate()
                 raise
             self.assertEqual(code, 0, stderr)
             self.assertEqual(remaining, b"")
@@ -302,6 +307,16 @@ class SkillsMcpServerTest(unittest.TestCase):
             self.assertNotEqual(res.returncode, 0)
             self.assertEqual(res.stdout, "")
             self.assertIn("source-unavailable", res.stderr)
+
+            res = subprocess.run(
+                [sys.executable, "-I", str(SERVER), "--from", "github:syn-owner/syn-skills@1111111111111111111111111111111111111111"],
+                input="",
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(res.returncode, 0)
+            self.assertEqual(res.stdout, "")
+            self.assertIn("invalid-source", res.stderr)
 
             checkout = Path(tmp) / "checkout"
             fixture = json.loads(PROTOCOL_FIXTURE.read_text(encoding="utf-8"))

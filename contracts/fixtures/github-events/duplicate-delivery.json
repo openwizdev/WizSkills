@@ -1,0 +1,48 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18017": "example-org/example-repo#1008"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-duplicate-delivery"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18017
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": [
+          "check spec 1008"
+        ]
+      }
+    },
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-duplicate-delivery"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18017
+        },
+        "action": "labeled"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,181 @@
+{
+  "schema": "openwiz.state-model.v1",
+  "machine": "toy parcel",
+  "sources": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "files": [
+      "synthetic/toy-machine.txt"
+    ]
+  },
+  "variables": {
+    "phase": {
+      "type": "enum",
+      "values": [
+        "idle",
+        "packed",
+        "done"
+      ]
+    },
+    "count": {
+      "type": "int",
+      "min": 0,
+      "max": 1
+    },
+    "tags": {
+      "type": "set",
+      "items": [
+        "paper",
+        "tape"
+      ],
+      "maxSize": 1
+    }
+  },
+  "init": {
+    "phase": "idle",
+    "count": 0,
+    "tags": []
+  },
+  "actions": [
+    {
+      "name": "pack",
+      "guard": {
+        "op": "and",
+        "args": [
+          {
+            "op": "eq",
+            "args": [
+              {
+                "var": "phase"
+              },
+              "idle"
+            ]
+          },
+          {
+            "op": "lt",
+            "args": [
+              {
+                "var": "count"
+              },
+              1
+            ]
+          }
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "packed"
+        },
+        {
+          "op": "assign",
+          "var": "count",
+          "value": 1
+        },
+        {
+          "op": "add",
+          "var": "tags",
+          "item": "paper"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "name": "finish",
+      "guard": {
+        "op": "and",
+        "args": [
+          {
+            "op": "eq",
+            "args": [
+              {
+                "var": "phase"
+              },
+              "packed"
+            ]
+          },
+          {
+            "op": "in",
+            "args": [
+              "paper",
+              {
+                "var": "tags"
+              }
+            ]
+          }
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "done"
+        },
+        {
+          "op": "remove",
+          "var": "tags",
+          "item": "paper"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    }
+  ],
+  "invariants": {
+    "well-packed": {
+      "op": "or",
+      "args": [
+        {
+          "op": "ne",
+          "args": [
+            {
+              "var": "phase"
+            },
+            "packed"
+          ]
+        },
+        {
+          "op": "in",
+          "args": [
+            "paper",
+            {
+              "var": "tags"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "bound": 3,
+  "progress": {
+    "delivered": {
+      "op": "eq",
+      "args": [
+        {
+          "var": "phase"
+        },
+        "done"
+      ]
+    }
+  },
+  "final": {
+    "op": "eq",
+    "args": [
+      {
+        "var": "phase"
+      },
+      "done"
+    ]
+  }
+}

@@ -20,12 +20,16 @@ release conditions. A failed read or unknown state stops its write or handoff.
 
 ## 2. Cut the tickets
 
-Cut end-to-end `Size: S.` tickets (~200 changed lines, `<=10` files). `approve.py`
-refuses `L` and any `M` (~400 lines) without `Why M:` in Parent. Use disjoint
-owned paths and prefer the shortest critical chain, then widest graph (F6). Compare
-cuts with `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`. Use a
-contract-first ticket for shared interfaces or explain why none is needed.
-See [tickets.md](tickets.md).
+Cut end-to-end `Size: S.` tickets (~200 changed lines, ≤10 files). For new specs,
+`approve.py` refuses `L` and requires `Why M:` in Parent for `M` (~400 lines).
+Cut flat (F6): shortest critical chain, then widest graph, disjoint owned paths,
+and only needed arrows. Use contract-first blockers for interface-only reliance.
+Explain shared interfaces without one. Ordering alone earns no arrow. Step 4
+requires `Why deep:` in the spec for a chain over 5,
+or over 3 and over 2/3 of the open tickets.
+Compare picture data with
+`python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`.
+Check size and what to merge or split. See [tickets.md](tickets.md).
 
 ## 3. Write and verify the tickets
 

@@ -1,0 +1,276 @@
+{
+ "schema": "openwiz.plan-links.v1",
+ "kind": "graph",
+ "repo": "openwizdev/OpenWiz",
+ "read_at": "2026-11-28T09:26:22Z",
+ "source": {
+  "kind": "spec",
+  "spec": 3375
+ },
+ "tickets": [
+  {
+   "number": 3376,
+   "title": "0.2.0 ST1: the settings contract, first",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [],
+   "body": "## Parent\n\nTicket ST1 of spec #3375 (0.2.0). Size: M.\nWhy M: the file's shape is one contract: its schema, its rules and one fixture per rule must agree in one review, since every reader and writer builds against all of it.\n\n## Owned paths\n\n- `contracts/settings.v1.md` (new)\n- `contracts/settings.v1.schema.json` (new)\n- `contracts/fixtures/settings/` (new)\n- `contracts/models.v1.md` (shared: only the new paragraph on the home settings file)\n- `changes/3376.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\nnone\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3377,
+   "title": "0.2.0 ST2: openwiz settings show reads the one file",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3376,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST2 of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `crates/core/src/settings/mod.rs` (new)\n- `crates/core/src/settings/read.rs` (new)\n- `crates/cli/src/settings.rs` (new)\n- `tests/cli-agent/settings.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod settings; line)\n- `crates/cli/src/lib.rs` (shared: only the settings dispatch)\n- `crates/cli/src/agent-catalogue.json` (shared: only the settings show entry)\n- `docs/cli.md` (shared: only the openwiz settings section's show lines)\n- `changes/3377.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3376 real: the settings contract's fields and rules, which the reader implements\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3378,
+   "title": "0.2.0 ST3: openwiz models show follows the settings file when there is one",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3377,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST3 of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `crates/core/src/models/mod.rs`\n- `crates/cli/src/models.rs` (shared: only the source line)\n- `contracts/fixtures/models/settings/` (new)\n- `tests/cli-agent/models_settings.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod models_settings; line)\n- `changes/3378.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3377 real: the core settings reader, which the models reader calls\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3379,
+   "title": "0.2.0 ST4: launch-fleet reads the settings once per launch and records the version",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3377,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST4 of spec #3375 (0.2.0). Size: M.\nWhy M: reading the settings once per launch and recording the version it read are one launch path; split, a start could use settings without recording which version it used.\n\n## Owned paths\n\n- `skills/launch-fleet/scripts/settings.py` in `openwizdev/WizSkills` (new)\n- `skills/launch-fleet/scripts/test-settings.py` in `openwizdev/WizSkills` (new)\n- `skills/launch-fleet/scripts/host.py` in `openwizdev/WizSkills` (shared: only the role-choice read and the account's profile variable)\n- `skills/launch-fleet/scripts/test-host.py` in `openwizdev/WizSkills` (shared: only the settings cases)\n- `skills/launch-fleet/references/records.md` in `openwizdev/WizSkills` (shared: only the settings: v<N> start-record line)\n- `skills/launch-fleet/references/launch.md` in `openwizdev/WizSkills` (shared: only the paragraph on which choice a start uses)\n- `contracts/settings.v1.md` in `openwizdev/WizSkills` (new, byte copy)\n- `contracts/settings.v1.schema.json` in `openwizdev/WizSkills` (new, byte copy)\n- `contracts/models.v1.md` in `openwizdev/WizSkills` (shared: only the byte copy of the new paragraph)\n- `.changeset/settings-launch.md` in `openwizdev/WizSkills` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3377 real: `openwiz settings show --json`, which the launcher calls once per launch\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3380,
+   "title": "0.2.0 ST5: tell Wiz to change any setting in plain words",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3410,
+     "state": "OPEN"
+    },
+    {
+     "number": 3977,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST5 of spec #3375 (0.2.0). Size: M.\nWhy M: the skill's words and its eval cases, including the messages that aren't the owner's, land together, since the evals are the skill's only proof.\n\n## Owned paths\n\n- `skills/settings/` in `openwizdev/WizSkills` (new)\n- `skills/README.md` in `openwizdev/WizSkills` (shared: only the settings row)\n- `.changeset/settings-skill.md` in `openwizdev/WizSkills` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3977 real: `openwiz settings set` and `undo`, which the skill calls\n- #3410 real: the `openwiz:setting-proposal v1` comment form the skill applies on the owner's yes\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3381,
+   "title": "0.2.0 ST6: the T3 board's settings routes, behind the page token",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3409,
+     "state": "OPEN"
+    },
+    {
+     "number": 3433,
+     "state": "OPEN"
+    },
+    {
+     "number": 3977,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST6 of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `t3/board/server.ts` in `openwizdev/WizPlugins` (shared: only the settings read, write and Ask Wiz routes and the page token)\n- `t3/board/settings-server.test.ts` in `openwizdev/WizPlugins` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3409 real: the landed T3 board and its server that these routes plug into\n- #3977 real: `openwiz settings show`, `set` and `undo`, which the server calls\n- #3433 real: the home contract naming the Wiz thread the Ask route sends to\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3382,
+   "title": "0.2.0 ST7: openwiz settings fill starts from what is signed in",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3494,
+     "state": "OPEN"
+    },
+    {
+     "number": 3976,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST7 of spec #3375 (0.2.0). Size: M.\nWhy M: `fill` is one pass from the sign-in readings to one new file, and each of its rules (signed-in harnesses only, the cross-family reviewer, only `local` on, every opt-in off) shapes that same write.\n\n## Owned paths\n\n- `crates/core/src/settings/fill.rs` (new)\n- `crates/core/src/settings/mod.rs` (shared: only the fill module line)\n- `crates/cli/src/settings.rs` (shared: only the fill subcommand)\n- `tests/cli-agent/settings_fill.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod settings_fill; line)\n- `changes/3382.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3976 real: the settings writer and command that `fill` extends\n- #3494 real: the usage readings' sign-in status per account that `fill` reads\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3383,
+   "title": "0.2.0 ST8: live check: settings by chat and by tab on the home box",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3378,
+     "state": "OPEN"
+    },
+    {
+     "number": 3379,
+     "state": "OPEN"
+    },
+    {
+     "number": 3380,
+     "state": "OPEN"
+    },
+    {
+     "number": 3382,
+     "state": "OPEN"
+    },
+    {
+     "number": 3978,
+     "state": "OPEN"
+    },
+    {
+     "number": 3980,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST8 of spec #3375 (0.2.0). Size: S.\n\n## Done by\n\nThe owner.\n\n## Owned paths\n\n- `docs/evidence/3383/` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3378 real: `openwiz models` following the settings file, checked in step 6\n- #3379 real: launch-fleet reading settings per launch, checked in steps 5 and 6\n- #3380 real: the settings skill Wiz uses in steps 2 and 4\n- #3980 real: the Settings view used from the phone in step 3\n- #3382 real: `openwiz settings fill` run in step 1\n- #3978 real: the `openwiz/settings` backup branch checked in step 7\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3976,
+   "title": "0.2.0 ST2b: openwiz settings set refuses every invalid change and is the only writer",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3377,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST2b of spec #3375 (0.2.0). Size: M.\nWhy M: the whole-file checker and the atomic writer are one gate: `set` may only write what the checker passed, so a writer without its checker could write an invalid file.\n\n## Owned paths\n\n- `crates/core/src/settings/check.rs` (new)\n- `crates/core/src/settings/write.rs` (new)\n- `crates/core/src/settings/mod.rs` (shared: only the check and write modules and their exports)\n- `crates/cli/src/settings.rs` (shared: only the set subcommand)\n- `tests/cli-agent/settings_set.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod settings_set; line)\n- `crates/cli/src/agent-catalogue.json` (shared: only the settings set entry)\n- `docs/cli.md` (shared: only the openwiz settings section's set lines)\n- `changes/3976.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3377 real: the settings reader and the `openwiz settings` command that `set` extends\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3977,
+   "title": "0.2.0 ST2c: openwiz settings undo and history keep 10 versions",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3976,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST2c of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `crates/core/src/settings/history.rs` (new)\n- `crates/core/src/settings/mod.rs` (shared: only the history module line)\n- `crates/cli/src/settings.rs` (shared: only the undo and history subcommands)\n- `tests/cli-agent/settings_undo.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod settings_undo; line)\n- `crates/cli/src/agent-catalogue.json` (shared: only the settings undo and history entries)\n- `docs/cli.md` (shared: only the openwiz settings section's undo and history lines)\n- `changes/3977.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3976 real: the settings writer and the file's `history` that `undo` puts back through\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3978,
+   "title": "0.2.0 ST2d: each settings write is one commit on openwiz/settings, and restore rebuilds the file",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3976,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST2d of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `crates/core/src/settings/backup.rs` (new)\n- `crates/core/src/settings/write.rs` (shared: only the call that commits each write)\n- `crates/core/src/settings/mod.rs` (shared: only the backup module line)\n- `crates/cli/src/settings.rs` (shared: only the restore subcommand)\n- `tests/cli-agent/settings_backup.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod settings_backup; line)\n- `crates/cli/src/agent-catalogue.json` (shared: only the settings restore entry)\n- `docs/cli.md` (shared: only the openwiz settings section's backup and restore lines)\n- `changes/3978.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3976 real: the settings writer whose every write this commits\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3979,
+   "title": "0.2.0 ST3b: openwiz models set writes through to the settings file",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3378,
+     "state": "OPEN"
+    },
+    {
+     "number": 3976,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST3b of spec #3375 (0.2.0). Size: S.\n\n## Owned paths\n\n- `crates/core/src/models/write.rs`\n- `crates/cli/src/models.rs` (shared: only the write-through)\n- `tests/cli-agent/models_settings_set.rs` (new)\n- `tests/cli-agent/main.rs` (shared: only the mod models_settings_set; line)\n- `changes/3979.md` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3378 real: the models source detection and the two-source fixtures that `set` writes against\n- #3976 real: the settings writer that `models set` writes through\n",
+   "start_recorded": false,
+   "pull_requests": []
+  },
+  {
+   "number": 3980,
+   "title": "0.2.0 ST6b: the Settings view on WizBar's rail in T3",
+   "state": "OPEN",
+   "labels": [],
+   "milestone": "0.2.0",
+   "parent": 3375,
+   "blocked_by": [
+    {
+     "number": 3381,
+     "state": "OPEN"
+    },
+    {
+     "number": 3429,
+     "state": "OPEN"
+    },
+    {
+     "number": 3494,
+     "state": "OPEN"
+    }
+   ],
+   "body": "## Parent\n\nTicket ST6b of spec #3375 (0.2.0). Size: M.\nWhy M: the four cards are one screen from one accepted mock, and its browser tests and screenshots check that whole screen at once.\n\n## Owned paths\n\n- `t3/board/settings.ts` in `openwizdev/WizPlugins` (new)\n- `t3/board/settings.test.ts` in `openwizdev/WizPlugins` (new)\n- `t3/board/settings.browser.test.ts` in `openwizdev/WizPlugins` (new)\n- `t3/board/rail.ts` in `openwizdev/WizPlugins` (shared: only the Settings tab entry)\n- `docs/evidence/t3-settings/` in `openwizdev/WizPlugins` (new)\n\n**Relies on:** nothing\n\n## Links\n\n- #3381 real: the board server's settings read, write and Ask Wiz routes the view calls\n- #3494 real: `openwiz usage --json` lane readings and pace words shown beside rows\n- #3429 real: the busy snapshot the Where agents run card reads\n",
+   "start_recorded": false,
+   "pull_requests": []
+  }
+ ]
+}

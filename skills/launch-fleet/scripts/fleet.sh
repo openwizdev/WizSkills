@@ -227,7 +227,7 @@ TICKET='number
                       pageInfo { hasNextPage endCursor }
                       nodes {
                         __typename
-                        ... on CheckRun { id name status conclusion databaseId checkSuite { workflowRun { createdAt databaseId } } }
+                        ... on CheckRun { id name status conclusion completedAt databaseId checkSuite { workflowRun { createdAt databaseId } } }
                         ... on StatusContext { id context state createdAt }
                       }
                     }
@@ -332,7 +332,7 @@ query() {
           pageInfo { hasNextPage endCursor }
           nodes {
             __typename
-            ... on CheckRun { id name status conclusion databaseId checkSuite { workflowRun { createdAt databaseId } } }
+            ... on CheckRun { id name status conclusion completedAt databaseId checkSuite { workflowRun { createdAt databaseId } } }
             ... on StatusContext { id context state createdAt }
           }
         }
@@ -1924,33 +1924,43 @@ def retry_parked_review($n; $at; $head; $v; $d; $rs):
         elif ($sent | age) >= 1800 then review_retry_line($at; $d.databaseId)
         else empty end
     end;
-# AD3 (#3117): a red base pauses a pull request instead of sending its builder
-# to fix a failure main already has. $W.base is the latest completed run of
-# each check on the default branch ({sha, checks: {name: {state, url}}, issues:
-# the open "Main is red: " titles, or null when that search cannot be trusted}),
-# read only after a first pass printed "base read". Only failure, timed_out
-# and startup_failure are red on main. A paused pull request stays paused
-# until those checks are green, unless it is also failing a check main passes.
 def failing_checks($c): [$W.checks[] as $n
   | ([$c.statusCheckRollup.contexts.nodes[]? | select((.name // .context) == $n)] | latest_check) as $l
   | select($l != null and ($l.__typename != "CheckRun" or $l.status == "COMPLETED") and (($l.conclusion // $l.state) | ci_failed))
-  | $n];
+  | {name: $n, completed: ($l.completedAt // $l.createdAt)}];
 def base_state($n): $W.base.checks[$n].state // "unknown";
-def fix_issue_clause($fails):
-  if $W.base.issues == null or any($fails[]; "Main is red: \(.)" | among($W.base.issues)) then ""
-  else "; open issue \"Main is red: \($fails[0])\" labelled ready-for-agent, naming \($fails | join(", ")) and its first red run \($W.base.checks[$fails[0]].url)" end;
+def base_fix_clause:
+  [$W.checks[] | select(base_state(.) == "red")] as $red
+  | $W.base.fix as $fix
+  | if $fix.opened then ""
+    elif $fix.pending != null then
+      if $fix.pending.at == null or ($W.now - $fix.pending.at) >= 600
+      then "; reconcile fix issue claim \($fix.pending.id)" else "" end
+    elif $W.base.issues == null or any($red[]; "Main is red: \(.)" | among($W.base.issues)) then ""
+    else "; open issue \"Main is red: \($red[0])\" labelled ready-for-agent, naming \($red | join(", ")) and its first red run \($W.base.checks[$red[0]].url)" end;
+def base_pause($head):
+  . as $record
+  | (.r | capture("^paused, base red (?<base>[0-9a-f]{40}) (?<checks>.+); head \($head)$"))
+  | $record + {base, held: (.checks | split(", "))};
 def base_lines($at; $rs; $head; $c; $tell):
   failing_checks($c) as $fails
-  | ([$rs[] | kind("paused, base red|resumed")] | max_by(.id)) as $last
-  | (if $last != null and ($last.r | startswith("paused, base red ")) then $last else null end) as $pause
-  | ([$pause.r // "" | capture("^paused, base red (?<sha>[0-9a-f]{40}) (?<checks>.+)$") | .checks | split(", ")] | first) as $held
-  | if any($rs[]; (.r | startswith("resumed ")) and (.r | names($head))) then empty
-    elif ($fails | length) > 0 and all($fails[]; base_state(.) == "red") then
-      if $pause != null and ($pause.r | names($W.base.sha)) then empty
-      else "base red \($at): \($fails | join(", ")) fail\(if ($fails | length) == 1 then "s" else "" end) on \($W.default) at \($W.base.sha) too; record paused, base red \($W.base.sha) \($fails | join(", ")), and leave its builder be" + fix_issue_clause($fails) end
-    elif $pause != null and $held != null and all($held[]; base_state(.) == "green") and all($fails[]; . as $n | any($held[]; . == $n)) then
+  | ([$rs[] | base_pause($head)] | max_by(.id)) as $pause
+  | ([$rs[] | select(.r | test("^resumed \($head), base green [0-9a-f]{40}$"))] | max_by(.id)) as $resume
+  | ($pause.held // []) as $held
+  | (all($fails[]; .name | among($held))) as $only_held
+  | ($pause != null and ($resume == null or $pause.id > $resume.id)) as $paused
+  | if ($paused | not) and $resume != null and $only_held
+       and all($fails[]; (.completed | type) == "string" and .completed < $resume.at) then empty
+    elif ($fails | length) > 0 and all($fails[]; base_state(.name) == "red") then
+      base_fix_clause as $issue
+      | if $paused and $pause.base == $W.base.sha then
+          if $issue == "" then empty else "base red \($at): pause already recorded at \($W.base.sha)" + $issue end
+        else ($fails | map(.name) | join(", ")) as $names
+          | "base red \($at): \($names) fail\(if ($fails | length) == 1 then "s" else "" end) on \($W.default) at \($W.base.sha) too; record paused, base red \($W.base.sha) \($names); head \($head), and leave its builder be" + $issue
+        end
+    elif $paused and $only_held and all($held[]; base_state(.) == "green") then
       "resume \($at): \($W.default) is green again at \($W.base.sha) (\($held | join(", "))); tell its builder to merge \($W.default) in and re-run CI\($tell); record resumed \($head), base green \($W.base.sha)"
-    elif $pause != null and $held != null and all($fails[]; base_state(.) != "green") then empty
+    elif $paused and $only_held and all($fails[]; base_state(.name) != "green") then empty
     else "CI failed \($at): tell its builder\($tell)" end;
 def ticket_lines_now($s): . as $t
   | if .comments.pageInfo.hasPreviousPage then look(.number; []; history_why)
@@ -2745,11 +2755,23 @@ base_read() {
               elif (.conclusion | IN("failure", "timed_out", "startup_failure")) then "red" else "unknown" end)}})
         | from_entries)}' "$TMP/base-runs.raw" > "$TMP/base.json" || die "invalid checks on $DEFAULT"
   if jq -e 'any(.checks[]; .state == "red")' "$TMP/base.json" > /dev/null; then
+    base_sha=$(jq -er '.sha' "$TMP/base.json") || die "invalid checks on $DEFAULT"
+    rest_pages "repos/$REPO/commits/$base_sha/comments?per_page=100" "$TMP/base-claims.raw" \
+      || die "can't read base fix claims"
+    jq -se --arg s "$base_sha" --slurpfile a "$TMP/authors.json" "$AUTHORED"'
+      select(length > 0 and all(.[]; type == "array")) | add
+      | select(all(.[]; type == "object" and (.id | type) == "number" and .id > 0 and .id == (.id | floor)
+          and .commit_id == $s and (.body | type) == "string"))
+      | authored($a[0])
+      | {opened: any(.[]; .body | test("^launch-fleet: base fix opened #[1-9][0-9]*$")),
+         pending: ([.[] | select(.body == "launch-fleet: base fix opening")
+           | {id, at: (.created_at | try fromdateiso8601 catch null)}] | min_by(.id))}' \
+      "$TMP/base-claims.raw" > "$TMP/base-fix.json" || die "invalid base fix claims"
     q=$(jq -rn --arg r "$REPO" '"repo:\($r) is:issue is:open in:title \"Main is red\"" | @uri') || die "can't write the search"
     rest "search/issues?q=$q&per_page=100" "$TMP/base-issues.json" || die "can't search for the Main is red issues"
-    jq -e --slurpfile b "$TMP/base.json" '
+    jq -e --slurpfile b "$TMP/base.json" --slurpfile f "$TMP/base-fix.json" '
       select(type == "object" and (.items | type) == "array" and (.incomplete_results | type) == "boolean" and (.total_count | type) == "number")
-      | $b[0] + {issues: (if .incomplete_results == false and .total_count == (.items | length)
+      | $b[0] + {fix: $f[0], issues: (if .incomplete_results == false and .total_count == (.items | length)
           then [.items[] | select(.state == "open" and (.title | type) == "string" and (.title | startswith("Main is red: "))) | .title]
           else null end)}' "$TMP/base-issues.json" > "$TMP/base.next" && mv "$TMP/base.next" "$TMP/base.json" \
       || die "invalid search for the Main is red issues"
@@ -3021,7 +3043,14 @@ elif [ "$cmd" = spec ]; then
   quiet
   [ -z "$RECORD" ] || keep_read
 fi
-awk '/^base red / { i = index($0, "; open issue \"Main is red: "); if (i) { if (asked) $0 = substr($0, 1, i - 1); asked = 1 } } { print }' \
+awk '/^base red / {
+  i = match($0, /; (open issue "Main is red: |reconcile fix issue claim )/)
+  if (i && asked) {
+    if ($0 ~ /: pause already recorded at /) next
+    $0 = substr($0, 1, i - 1)
+  }
+  if (i) asked = 1
+} { print }' \
   "$TMP/out.txt" > "$TMP/out.next" && mv "$TMP/out.next" "$TMP/out.txt" || die "can't write"
 [ -z "$REPLAY" ] || [ ! -e "$TMP/changed" ] || die "an answer changed since the saved full read"
 [ -z "$REPLAY" ] || ! grep -q '^spec done ' "$TMP/out.txt" || die "a spec done line names the follow-ups open now, so it is read in full"

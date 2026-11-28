@@ -1,29 +1,24 @@
 # A red main
 
-Read this for a `base red` or a `resume #P for #N at <commit>` line (AD3, openwizdev/OpenWiz#3117).
+Read this for a `base red` or a `resume #P for #N at <head>` line (AD3, openwizdev/OpenWiz#3117).
 
-When `main` is red, open pull requests fail the same checks, and their builders did not cause it. `fleet.sh` pauses a pull request whose failing checks all fail on main, asks for one fix ticket, and resumes the paused pull requests once main is green.
+## Pause and resume
 
-## How fleet.sh decides
+`fleet.sh` compares the latest failing required checks on the pull request with the latest completed runs for the same names at the default branch tip. A base check is red when it concludes `failure`, `timed_out` or `startup_failure`.
 
-Where it would print `CI failed #P`, it first reads the checks on the tip of the default branch (`commits/<default>/check-runs`, one REST read for the whole tick) and keeps the latest completed run of each check name. A run is red only when its conclusion is `failure`, `timed_out` or `startup_failure`. Then, for that pull request's failing required checks:
+- On `base red`, record `launch-fleet: paused, base red <base commit> <checks>; head <head>` on the pull request when the line asks. The same head and base commit keep one active pause. Leave the builder alone. A line saying the pause is already recorded handles only its fix issue.
+- When the held checks are green on the base and the head has no failing check outside the pause, `resume` tells the builder to merge the default branch and re-run CI. After confirmed delivery, record `launch-fleet: resumed <head>, base green <base commit>` once. This delivery uses the PR resume record as its guard.
+- While the base is still running or its result is unknown, the active pause holds only failures it names. A fresh PR head is judged on its own, including when an old pause lacks a head field.
+- After a resume, only the held failures known to have completed before that resume are quiet. Another failing check or a later failed run is judged afresh. A legacy status uses its creation time.
+- A builder-owned failure emits `CI failed`. Cross-repository pull requests keep their usual `CI failed` path.
 
-- **All of them are red on main:** `base red #P for #N at <head>: <checks> fail(s) on main at <base commit> too; record paused, base red <base commit> <checks>, and leave its builder be`. Nothing is printed when the pull request's latest pause or resume record is already a pause for that same base commit.
-- **The pull request is paused** and every check that pause named is green on main, and it is not failing a check outside that pause: `resume #P for #N at <head>: main is green again at <base commit> (<checks>); tell its builder to merge main in and re-run CI`. A `resumed` record that names the current head prints nothing more.
-- **Paused, and main is not green yet** (still red, still running, or not a red conclusion): nothing, while none of its failing checks is green on main.
-- **Anything else** (a failing check that is green on main, a check with no completed run on main, a pull request in another repository): `CI failed`, as before.
+## Open the fix issue once
 
-## The fix ticket
+The issue clause names the currently red required checks on main, using the first of those names for `Main is red: <check>` and linking its latest completed red run at that tip. An open fix issue titled for any of those checks covers the red base. An incomplete issue search withholds the issue clause. A later tick can still ask to open the issue after the pause is already recorded.
 
-When one of main's checks is red, `fleet.sh` searches the open issues for titles `Main is red: <check>`. The first red run is the latest completed run of that check on main's tip, the run this tick sees. If none of the failing checks already has an open issue, the first `base red` line of the tick ends `; open issue "Main is red: <first check>" labelled ready-for-agent, naming <checks> and its first red run <link>`. Open exactly that issue. Later lines in the tick, and later ticks that find it open, ask for nothing. A search GitHub reports as incomplete asks for nothing, so a second issue is never opened on a partial list.
+Use one repository-wide claim on the named base commit across all ticks, specs and wakes. The issue clause is an invitation to claim. Use this guard even when the current tick printed only one invitation.
 
-## Records
-
-On the pull request, each written once:
-
-| Record | Means |
-| --- | --- |
-| `launch-fleet: paused, base red <base commit> <check>, <check>` | Its failures are main's; its builder was not told |
-| `launch-fleet: resumed <head>, base green <base commit>` | Main was green again; its builder was told to merge main in and re-run CI |
-
-The resume line's record is its guard. It is not one of the four `fleet.sh claim` lines (`start`, `review`, the builder `resume #<ticket>`, `release`): claiming it would withdraw. A paused pull request that gets a new head is judged again at that head. A pause for the same base commit is not recorded twice.
+1. Recheck that the issue clause still applies. Post a commit comment with exactly `launch-fleet: base fix opening` on the named base commit. Save the returned comment ID. Use the repository commit comments endpoint, `repos/<owner>/<repo>/commits/<base commit>/comments`.
+2. Read all pages of that commit's comments from GitHub. Among exact opening records from the repository's record authors, only the lowest ID may proceed. A trusted `launch-fleet: base fix opened #<issue>` record ends the attempt for that commit. Stop on an incomplete read. If another claim won, withdraw your own claim with `launch-fleet: base fix withdrawn` and leave creation to its owner.
+3. With the winning claim, recheck the default branch tip and its red checks. Read the repository's open issues directly, with every page, using `repos/<owner>/<repo>/issues?state=open&per_page=100`. Use exact titles for any of the red checks and exclude pull requests. An existing fix issue satisfies the claim. If nothing covers the red base and the same issue clause still applies, create the named issue with the `ready-for-agent` label, the checks and the red run link. Withdraw the claim if fresh evidence shows the issue is no longer due.
+4. After reading back the matching issue, edit your claim through `repos/<owner>/<repo>/comments/<comment ID>` to `launch-fleet: base fix opened #<issue>` and verify the saved record. A later wake sees the commit comment even while issue search catches up. If the issue create or its read-back has an unknown outcome, leave the claim in place and ask the orchestrator to reconcile it against the issue list. Release an unfinished claim only after confirming the original sender has stopped and no issue was created. A claim still pending after ten minutes produces a `reconcile fix issue claim <ID>` line. Use that line to reconcile the same claim. Elapsed time alone gives no permission to create another issue.

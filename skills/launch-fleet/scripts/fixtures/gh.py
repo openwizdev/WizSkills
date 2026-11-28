@@ -551,6 +551,7 @@ def graphql(w, repo, o, ids, page, answer):
                             'conclusion': get(c, 'conclusion'),
                             'databaseId': alt(get(c, 'databaseId'), 100 + i if isinstance(i, int) else fail('the world is not valid')),
                             'startedAt': get(c, 'startedAt'),
+                            'completedAt': get(c, 'completedAt'),
                             # K9 (#337): the check's workflow run, "run" its createdAt and "runId" its databaseId.
                             'checkSuite': {'workflowRun': None if get(c, 'run') is None else
                                            {'createdAt': get(c, 'run'), 'databaseId': get(c, 'runId')}}})

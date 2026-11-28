@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1074
+CASES=1085
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -175,15 +175,14 @@ def base_runs($runs): .baseChecks = [$runs | to_entries[] | {id: (700 + .key), n
   status: (if .value[1] == null then "in_progress" else "completed" end), conclusion: .value[1], head_sha: sha(77),
   html_url: "https://github.com/synthetic-owner/synthetic-repo/actions/runs/7\(.key)/job/70\(.key)"}];
 # A short synthetic builder thread, so a new line carries no private-shaped token.
-def red31: pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE")
+def red31: pr31 | pull(31; .rollup = "FAILURE" | .checks[1] |= (.conclusion = "FAILURE" | .completedAt = at("11:00")))
   | (.issues[] | select(.number == 12) | .comments[].body) |= gsub("thread thr_" + "syn12"; "thread room-12");
 def main_red: base_runs([["build", "success"], ["test", "failure"]]);
-def paused31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test");
-def legacy_pause31: paused31;
-def bound_pause31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test; head \(sha(31))");
+def legacy_pause31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test");
+def paused31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test; head \(sha(31))");
 def resumed31: pr_say(31; 3102; "11:20"; "launch-fleet: resumed \(sha(31)), base green \(sha(77))");
 def main_green: base_runs([["build", "success"], ["test", "success"]]);
-def fix_claim($id; $body): .commitComments += [{id: $id, commit_id: sha(77), body: $body}];
+def fix_claim($id; $body): .commitComments += [{id: $id, commit_id: sha(77), body: $body, created_at: at("11:59")}];
 def fix_issue($n; $title): .issues += [{number: $n, title: $title, state: "OPEN", parent: null, labels: [], blockedBy: [], body: "", comments: []}];
 # #923: three configured required names; all run IDs and times are synthetic.
 def ci31: pr31
@@ -843,10 +842,10 @@ expect 'a CI failure already sent is not sent again' 0 check.json 'pr31 | pull(3
 RUN70=https://github.com/synthetic-owner/synthetic-repo/actions/runs/70/job/700
 RUN71=https://github.com/synthetic-owner/synthetic-repo/actions/runs/71/job/701
 expect 'base red: a check that also fails on main pauses the PR' 0 check.json 'red31 | main_red' -- check <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
 EOF
 expect 'base red: a wake reads main too' 0 check.json 'red31 | main_red' -- wake 31 <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
 EOF
 expect 'base red: a check green on main is still the builder'"'"'s' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "success"]])' -- check <<EOF
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
@@ -855,11 +854,11 @@ expect 'base red: main still running is still the builder'"'"'s' 0 check.json 'r
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
 expect 'base red: an open fix issue is not opened again' 0 check.json 'red31 | main_red | fix_issue(90; "Main is red: test")' -- check <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
 EOF
 expect 'base red: two paused PRs ask for one fix issue' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red' -- check <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
-base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
 EOF
 expect 'base red: a recorded pause and fix issue write nothing again' 0 check.json 'red31 | main_red | paused31 | fix_issue(90; "Main is red: test")' -- check < /dev/null
 expect 'base red: paused while main still runs, it waits' 0 check.json 'red31 | paused31 | base_runs([["build", "success"], ["test", null]])' -- check < /dev/null
@@ -874,16 +873,16 @@ expect 'base red: cancelled on main is not a red main' 0 check.json 'red31 | bas
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
 expect 'base red: an incomplete search asks for no fix issue' 0 check.json 'red31 | main_red | .searchIncomplete = true' -- check <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
 EOF
 expect 'base red: a builder-owned failure while paused is still CI failed' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | paused31 | main_red' -- check <<EOF
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
 expect 'base red: both failing checks red on main names both' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE") | base_runs([["build", "failure"], ["test", "failure"]])' -- check <<EOF
-base red #31 for #12 at $S31: build, test fail on main at $S77 too; record paused, base red $S77 build, test, and leave its builder be; open issue "Main is red: build" labelled ready-for-agent, naming build, test and its first red run $RUN70
+base red #31 for #12 at $S31: build, test fail on main at $S77 too; record paused, base red $S77 build, test; head $S31, and leave its builder be; open issue "Main is red: build" labelled ready-for-agent, naming build, test and its first red run $RUN70
 EOF
 expect 'base red: timed out on main pauses the PR' 0 check.json 'red31 | base_runs([["build", "success"], ["test", "timed_out"]])' -- check <<EOF
-base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
 EOF
 expect 'base red: a check run with no id is refused' 2 check.json 'red31 | main_red | .baseChecks[1].id = "nope"' -- check <<EOF
 invalid checks on main
@@ -891,17 +890,17 @@ EOF
 expect 'base red: a cross-repository pull request stays CI failed' 0 check.json 'red31 | main_red | pull(31; .repo = "other-owner/other-repo")' -- check <<EOF
 CI failed other-owner/other-repo#31 for #12 at $S31: tell its builder, thread room-12
 EOF
-expect 'base red: retry the missing issue after a pause' 0 check.json 'red31 | main_red | bound_pause31' -- check <<EOF
+expect 'base red: retry the missing issue after a pause' 0 check.json 'red31 | main_red | paused31' -- check <<EOF
 base red #31 for #12 at $S31: pause already recorded at $S77; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
 EOF
-expect 'base red: a retry still refuses incomplete issue search' 0 check.json 'red31 | main_red | bound_pause31 | .searchIncomplete = true' -- check < /dev/null
-expect 'base red: a resumed head can fail a different check' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE" | .checks[1].conclusion = "SUCCESS") | bound_pause31 | resumed31 | main_green' -- check <<EOF
+expect 'base red: a retry still refuses incomplete issue search' 0 check.json 'red31 | main_red | paused31 | .searchIncomplete = true' -- check < /dev/null
+expect 'base red: a resumed head can fail a different check' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE" | .checks[1].conclusion = "SUCCESS") | paused31 | resumed31 | main_green' -- check <<EOF
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
-expect 'base red: a check rerun can fail after resume' 0 check.json 'red31 | pull(31; .checks[1].completedAt = at("11:30")) | bound_pause31 | resumed31 | main_green' -- check <<EOF
+expect 'base red: a check rerun can fail after resume' 0 check.json 'red31 | pull(31; .checks[1].completedAt = at("11:30")) | paused31 | resumed31 | main_green' -- check <<EOF
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
-expect 'base red: a status context can fail after resume' 0 check.json 'red31 | pull(31; .checks[1] = {type: "StatusContext", context: "test", state: "FAILURE", createdAt: at("11:30")}) | bound_pause31 | resumed31 | main_green' -- check <<EOF
+expect 'base red: a status context can fail after resume' 0 check.json 'red31 | pull(31; .checks[1] = {type: "StatusContext", context: "test", state: "FAILURE", createdAt: at("11:30")}) | paused31 | resumed31 | main_green' -- check <<EOF
 CI failed #31 for #12 at $S31: tell its builder, thread room-12
 EOF
 expect 'base red: a new head on green main inherits no pause' 0 check.json 'red31 | legacy_pause31 | pull(31; .head = sha(99)) | main_green' -- check <<EOF
@@ -916,7 +915,7 @@ EOF
 expect 'base red: a later wake sees the issue before search does' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red | fix_claim(9001; "launch-fleet: base fix opened #90")' -- wake 32 <<EOF
 base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
 EOF
-expect 'base red: an interrupted issue create stays visible for reconciliation' 0 check.json 'red31 | main_red | bound_pause31 | fix_claim(9001; "launch-fleet: base fix opening") | .commitComments[0].created_at = at("11:10")' -- check <<EOF
+expect 'base red: an interrupted issue create stays visible for reconciliation' 0 check.json 'red31 | main_red | paused31 | fix_claim(9001; "launch-fleet: base fix opening") | .commitComments[0].created_at = at("11:10")' -- check <<EOF
 base red #31 for #12 at $S31: pause already recorded at $S77; reconcile fix issue claim 9001
 EOF
 expect 'base red: an existing multi-check fix covers a narrower PR failure' 0 check.json 'red31 | base_runs([["build", "failure"], ["test", "failure"]]) | fix_issue(90; "Main is red: build")' -- check <<EOF

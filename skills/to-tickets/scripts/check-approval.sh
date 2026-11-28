@@ -287,8 +287,7 @@ if jq -e '.machine == true' "$work/approval.json" > /dev/null 2>&1; then
   embedded_hash=$(sha256 "$work/embedded-revision") || fail "cannot hash machine approval revision text"
   [ "$embedded_hash" = "$fingerprint" ] || fail "spec #$spec's machine plan approval revision text does not match its fingerprint"
   sh "$revision_sh" "$spec" > "$work/current-revision" || fail "cannot run revision.sh for spec #$spec"
-  current_hash=$(sha256 "$work/current-revision") || fail "cannot hash current revision for spec #$spec"
-  [ "$current_hash" = "$fingerprint" ] || fail "spec #$spec's machine plan approval is stale (fingerprint $fingerprint does not match current revision $current_hash)"
+  cmp -s "$work/embedded-revision" "$work/current-revision" || fail "spec #$spec's machine plan approval is stale"
 fi
 checkpoints
 echo "check-approval.sh: #$spec approval table is valid"

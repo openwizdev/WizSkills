@@ -53,6 +53,7 @@ class Repo(unittest.TestCase):
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
             self.stamp(1_800_000_000 + nth)
             self.git('add', '-A')
+            self.git('add', '-u', '--renormalize')
             self.git('commit', '-q', '-m', side)
         return self.git('rev-parse', 'HEAD^'), self.git('rev-parse', 'HEAD')
 

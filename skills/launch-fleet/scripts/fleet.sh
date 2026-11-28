@@ -82,23 +82,29 @@ if [ "$cmd" = overload ]; then
   [ $# -eq 1 ] || die "overload needs one action"
   [ -n "${GH_REPO:-}" ] && [ -n "${LAUNCH_FLEET_OVERLOAD_STATE:-}" ] \
     || die "overload needs GH_REPO and LAUNCH_FLEET_OVERLOAD_STATE"
-  # MT6 (#825): with LAUNCH_FLEET_OVERLOAD_SUPPLY (an OpenWiz checkout's
-  # absolute tools/ci-overload/supply.py), new work reads the collector's queue
-  # now into this call's own private file, which only this call's guard reads;
-  # the caller's input is never used then. A supplier that fails, or can't
-  # start, leaves the guard a missing input, so it refuses as unknown.
-  # Completion and reconciliation read nothing more.
+  if [ "$1" = resume ]; then
+    python3 -I "$(dirname "$0")/carried/alarm.py" \
+      --repository "$GH_REPO" --state "$LAUNCH_FLEET_OVERLOAD_STATE" \
+      --now "${LAUNCH_FLEET_NOW:-$(date -u +%s)}" --action resume
+    exit $?
+  fi
   input=${LAUNCH_FLEET_OVERLOAD_INPUT:-/nonexistent-overload-observation}
   case $1 in merge-batch | automatic-refresh | nonessential-poll)
-    if [ -n "${LAUNCH_FLEET_OVERLOAD_SUPPLY:-}" ]; then
-      case $LAUNCH_FLEET_OVERLOAD_SUPPLY in /*) ;;
+    supply=${LAUNCH_FLEET_OVERLOAD_SUPPLY:-}
+    if [ -n "$supply" ]; then
+      case $supply in /*) ;;
         *) die "LAUNCH_FLEET_OVERLOAD_SUPPLY must be absolute" ;;
       esac
+    elif [ -z "${LAUNCH_FLEET_OVERLOAD_INPUT:-}" ]; then
+      default_supply=$(dirname "$0")/overload-supply.py
+      [ -r "$default_supply" ] && supply=$default_supply
+    fi
+    if [ -n "$supply" ]; then
       input=/nonexistent-overload-observation
       if own=$(mktemp -d 2> /dev/null); then
         trap 'rm -rf "$own"' EXIT
         trap 'exit 2' HUP INT TERM
-        python3 -I "$LAUNCH_FLEET_OVERLOAD_SUPPLY" --repository "$GH_REPO" \
+        python3 -I "$supply" --repository "$GH_REPO" \
           --output "$own/observation.json" < /dev/null > /dev/null 2>&1 \
           && input=$own/observation.json
       fi

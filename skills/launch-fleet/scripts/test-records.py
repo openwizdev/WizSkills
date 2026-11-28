@@ -107,7 +107,10 @@ class Fleet(unittest.TestCase):
         for threads in ({'id': 'thr_synbuilder'}, 'thr_synbuilder', [{'title': '#12: Synthetic'}]):
             with self.subTest(threads=threads):
                 self.threads = threads
-                self.assertEqual(self.run_fleet('wake', '12'), 'look #12: thread discovery is out of reach\n')
+                empty = json.dumps({'repo': self.world['repo'], 'threads': {}})
+                self.assertEqual(self.run_fleet('wake', '12'),
+                                 'look #12: private thread map LAUNCH_FLEET_STATE is unset; create it outside the '
+                                 f'checkout with {empty}\n')
 
     def test_fresh_install_without_private_routing_files_discovers_builder_on_cloudroom(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
@@ -642,8 +645,19 @@ class OpsPass(unittest.TestCase):
             self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', discovered, saved),
                              ('thr_synbuilder', None))
             self.assertEqual(self.records.reviewer_thread(31, SHA, discovered, saved), (THREAD, None))
-        self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}),
-                         (None, 'thread discovery is out of reach'))
+        unset = ('private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with '
+                 + json.dumps({'repo': '<owner/name>', 'threads': {}}))
+        self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}), (None, unset))
+        self.env_state = os.environ.get('LAUNCH_FLEET_STATE')
+        os.environ['LAUNCH_FLEET_STATE'] = '/tmp/openwiz-routing-present.json'
+        try:
+            self.assertEqual(self.records.builder_thread(12, 'room/12-synthetic', None, {}),
+                             (None, 'thread discovery is out of reach'))
+        finally:
+            if self.env_state is None:
+                os.environ.pop('LAUNCH_FLEET_STATE', None)
+            else:
+                os.environ['LAUNCH_FLEET_STATE'] = self.env_state
 
     def test_command_line_pass_prints_one_result_per_operation(self):
         view = {'pass': {'generation': 1, 'owner': 'primary'}, 'generations': self.generations,
@@ -703,8 +717,10 @@ class CrossRepositoryReviews(unittest.TestCase):
 
     def test_this_repositorys_bare_key_never_routes_a_same_numbered_pull_request_elsewhere(self):
         started = [(3101, 'launch-fleet: review started ' + SHA), (3102, 'launch-fleet: re-check sent ' + NEW)]
+        unset = ('private thread map LAUNCH_FLEET_STATE is unset; create it outside the checkout with '
+                 + json.dumps({'repo': 'example/public', 'threads': {}}))
         self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('example/tools', started)),
-                         [[(None, 'thread discovery is out of reach')]])
+                         [[(None, unset)]])
         self.assertEqual(self.routes({f'review:31:{SHA}': self.LOCAL}, self.pull('Example/Public', started)),
                          [[(self.LOCAL, None)]])
 

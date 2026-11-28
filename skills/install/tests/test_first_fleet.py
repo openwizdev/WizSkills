@@ -1245,6 +1245,9 @@ real.arguments(sys.argv[1:])  # what launch hands over must pass the real sessio
 with open(os.environ['FAKE_SESSION_LOG'], 'a') as log:
     log.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'adapters': os.environ.get('OPENWIZ_ADAPTERS'),
                           'github_only': os.environ.get('LAUNCH_FLEET_GITHUB_ONLY'),
+                          'state': os.environ.get('LAUNCH_FLEET_STATE'),
+                          'runs': os.environ.get('LAUNCH_FLEET_RUNS'),
+                          'loops': os.environ.get('LAUNCH_FLEET_LOOPS'),
                           'heartbeat': Path(os.environ['FAKE_HEARTBEAT_ON']).exists()}) + '\n')
 script = json.loads(Path(os.environ['FAKE_SESSION_SCRIPT']).read_text())
 sys.stdout.write(script['stdout'])
@@ -1254,7 +1257,8 @@ FAKE_HEARTBEAT = r'''import json, os, sys
 from pathlib import Path
 on = Path(os.environ['FAKE_HEARTBEAT_ON'])
 with open(os.environ['FAKE_HEARTBEAT_LOG'], 'a') as log:
-    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS')}) + '\n')
+    log.write(json.dumps({'argv': sys.argv[1:], 'adapters': os.environ.get('OPENWIZ_ADAPTERS'),
+                          'runs': os.environ.get('LAUNCH_FLEET_RUNS')}) + '\n')
 if sys.argv[1] == 'status' and on.exists() and on.read_text() == 'unreadable':
     sys.exit(7)
 elif sys.argv[1] == 'status':
@@ -1480,6 +1484,93 @@ class LocalSession(unittest.TestCase):
         self.assertEqual(len(self.log(road, 'session.log')), 1, 'the opt-in starts no session')
         watch = road.tool({'tool': ['progress', '--spec', '900'], 'progress': ['building', 'building', 'blocked']})
         self.assertIn("Spec #900's local heartbeat is active", watch.stdout)
+
+    def test_a_fresh_launch_creates_private_routing_files_and_hands_them_to_the_session(self):
+        road = self.road()
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        folder = road.state.parent / 'fleet-routing'
+        expected = {
+            'state': (folder / 'threads.json', {'repo': road.repo, 'threads': {}}),
+            'loops': (folder / 'loops.json', {'repo': road.repo, 'loops': {}}),
+        }
+        handed = self.log(road, 'session.log')[0]
+        for key, (path, body) in expected.items():
+            self.assertEqual(handed[key], str(path))
+            self.assertEqual(json.loads(path.read_text()), body)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertIsNone(handed['runs'])
+        self.assertFalse((folder / 'runs.json').exists())
+        kept = {'repo': road.repo, 'threads': {'builder:901': 'thr_synthetic'}}
+        expected['state'][0].write_text(json.dumps(kept) + '\n')
+        self.script(road, 0, 'session: tick 1: nothing due\nsession: done: spec #900: every ticket is closed\n')
+        carried = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        self.assertEqual(json.loads(expected['state'][0].read_text()), kept)
+
+    def test_carry_on_and_heartbeat_keep_existing_runs_map_and_operator_routing_env(self):
+        road = self.road()
+        key = hashlib.sha256(road.repo.lower().encode()).hexdigest()[:20]
+        runs_dir = road.home / '.local/state/openwiz-heartbeat'
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        runs_file = runs_dir / ('runs-%s.json' % key)
+        existing = {'repo': road.repo, 'runs': {'901': {'host': 'local', 'run': 'run-0123456789ab'}}}
+        runs_file.write_text(json.dumps(existing) + '\n')
+        _, yes = self.launched(road)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        self.script(road, 0, 'session: tick 1: nothing due\nsession: done: spec #900: every ticket is closed\n')
+        carried = road.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        offer = road.helper(['launch', '--spec', '900', '--heartbeat'])
+        self.assertEqual(offer.returncode, 12, offer.stdout + offer.stderr)
+        sessions = self.log(road, 'session.log')
+        self.assertEqual([s['runs'] for s in sessions], [None, None])
+        installs = [c for c in self.log(road, 'heartbeat.log') if c['argv'][0] == 'install']
+        self.assertEqual([c['runs'] for c in installs], [None])
+        self.assertFalse((road.state.parent / 'fleet-routing/runs.json').exists())
+        self.assertEqual(json.loads(runs_file.read_text()), existing)
+        records = runpy.run_path(str(SKILL_DIR.parent / 'launch-fleet/scripts/records.py'))
+        resolved = sessions[1]['runs'] or str(runs_file)
+        saved_env = os.environ.get('LAUNCH_FLEET_RUNS')
+        os.environ['LAUNCH_FLEET_RUNS'] = resolved
+        try:
+            loaded = records['driver_runs'](road.repo)
+            self.assertEqual(records['builder_thread'](901, 'room/901-synthetic', None, {}, loaded, repo=road.repo),
+                             ('run:901', None))
+        finally:
+            if saved_env is None:
+                os.environ.pop('LAUNCH_FLEET_RUNS', None)
+            else:
+                os.environ['LAUNCH_FLEET_RUNS'] = saved_env
+        custom = self.road()
+        operator = {
+            'state': (custom.dir / 'operator-threads.json', {'repo': custom.repo, 'threads': {}}),
+            'loops': (custom.dir / 'operator-loops.json', {'repo': custom.repo, 'loops': {}}),
+            'runs': (custom.dir / 'operator-runs.json', {'repo': custom.repo, 'runs': {}}),
+        }
+        for path, body in operator.values():
+            path.write_text(json.dumps(body) + '\n')
+        custom.extra_env.update(LAUNCH_FLEET_STATE=str(operator['state'][0]),
+                                LAUNCH_FLEET_LOOPS=str(operator['loops'][0]),
+                                LAUNCH_FLEET_RUNS=str(operator['runs'][0]))
+        _, yes = self.launched(custom)
+        self.assertEqual(yes.returncode, 0, yes.stdout + yes.stderr)
+        first = self.log(custom, 'session.log')[0]
+        for field, (path, _) in operator.items():
+            self.assertEqual(first[field], str(path))
+        self.assertFalse((custom.state.parent / 'fleet-routing').exists())
+        del custom.extra_env['LAUNCH_FLEET_LOOPS']
+        self.script(custom, 0, 'session: tick 1: nothing due\nsession: done: spec #900: every ticket is closed\n')
+        carried = custom.helper(['launch', '--spec', '900', '--carry-on'])
+        self.assertEqual(carried.returncode, 0, carried.stdout + carried.stderr)
+        second = self.log(custom, 'session.log')[1]
+        self.assertEqual(second['state'], str(operator['state'][0]))
+        self.assertEqual(second['runs'], str(operator['runs'][0]))
+        loops_default = custom.state.parent / 'fleet-routing/loops.json'
+        self.assertEqual(second['loops'], str(loops_default))
+        self.assertEqual(json.loads(loops_default.read_text()), {'repo': custom.repo, 'loops': {}})
+        self.assertFalse((custom.state.parent / 'fleet-routing/threads.json').exists())
+        self.assertFalse((custom.state.parent / 'fleet-routing/runs.json').exists())
 
     def test_carry_on_runs_the_session_again_with_the_saved_driver_folder_and_github_only(self):
         road = self.road()

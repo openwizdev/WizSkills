@@ -179,6 +179,11 @@ def red31: pr31 | pull(31; .rollup = "FAILURE" | .checks[1].conclusion = "FAILUR
   | (.issues[] | select(.number == 12) | .comments[].body) |= gsub("thread thr_" + "syn12"; "thread room-12");
 def main_red: base_runs([["build", "success"], ["test", "failure"]]);
 def paused31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test");
+def legacy_pause31: paused31;
+def bound_pause31: pr_say(31; 3101; "11:10"; "launch-fleet: paused, base red \(sha(77)) test; head \(sha(31))");
+def resumed31: pr_say(31; 3102; "11:20"; "launch-fleet: resumed \(sha(31)), base green \(sha(77))");
+def main_green: base_runs([["build", "success"], ["test", "success"]]);
+def fix_claim($id; $body): .commitComments += [{id: $id, commit_id: sha(77), body: $body}];
 def fix_issue($n; $title): .issues += [{number: $n, title: $title, state: "OPEN", parent: null, labels: [], blockedBy: [], body: "", comments: []}];
 # #923: three configured required names; all run IDs and times are synthetic.
 def ci31: pr31
@@ -885,6 +890,34 @@ invalid checks on main
 EOF
 expect 'base red: a cross-repository pull request stays CI failed' 0 check.json 'red31 | main_red | pull(31; .repo = "other-owner/other-repo")' -- check <<EOF
 CI failed other-owner/other-repo#31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: retry the missing issue after a pause' 0 check.json 'red31 | main_red | bound_pause31' -- check <<EOF
+base red #31 for #12 at $S31: pause already recorded at $S77; open issue "Main is red: test" labelled ready-for-agent, naming test and its first red run $RUN71
+EOF
+expect 'base red: a retry still refuses incomplete issue search' 0 check.json 'red31 | main_red | bound_pause31 | .searchIncomplete = true' -- check < /dev/null
+expect 'base red: a resumed head can fail a different check' 0 check.json 'red31 | pull(31; .checks[0].conclusion = "FAILURE" | .checks[1].conclusion = "SUCCESS") | bound_pause31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a check rerun can fail after resume' 0 check.json 'red31 | pull(31; .checks[1].completedAt = at("11:30")) | bound_pause31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a status context can fail after resume' 0 check.json 'red31 | pull(31; .checks[1] = {type: "StatusContext", context: "test", state: "FAILURE", createdAt: at("11:30")}) | bound_pause31 | resumed31 | main_green' -- check <<EOF
+CI failed #31 for #12 at $S31: tell its builder, thread room-12
+EOF
+expect 'base red: a new head on green main inherits no pause' 0 check.json 'red31 | legacy_pause31 | pull(31; .head = sha(99)) | main_green' -- check <<EOF
+CI failed #31 for #12 at $S99: tell its builder, thread room-12
+EOF
+expect 'base red: a new head on running main inherits no pause' 0 check.json 'red31 | legacy_pause31 | pull(31; .head = sha(99)) | base_runs([["build", "success"], ["test", null]])' -- check <<EOF
+CI failed #31 for #12 at $S99: tell its builder, thread room-12
+EOF
+expect 'base red: a concurrent wake sees the first wake claim' 0 check.json 'red31 | main_red | fix_claim(9001; "launch-fleet: base fix opening")' -- wake 31 <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
+EOF
+expect 'base red: a later wake sees the issue before search does' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red | fix_claim(9001; "launch-fleet: base fix opened #90")' -- wake 32 <<EOF
+base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
+EOF
+expect 'base red: an existing multi-check fix covers a narrower PR failure' 0 check.json 'red31 | base_runs([["build", "failure"], ["test", "failure"]]) | fix_issue(90; "Main is red: build")' -- check <<EOF
+base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
 EOF
 # #2119: synthetic API windows; required names occur only after 40 contexts.
 expect 'contexts: overflow reads required checks on the third page' 0 check.json 'pr31 | pull(31; .checks = ([range(40) | {name: "optional-\(.)", status: "COMPLETED", conclusion: "SUCCESS"}] + .checks))' -- check <<EOF
@@ -4668,7 +4701,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
-  'base red:*') expected=18 ;;
+  'base red:*') expected=28 ;;
   'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))

@@ -46,7 +46,7 @@
   "turns": [
     {
       "step": "teach",
-      "agent": "OpenWiz is a factory of coding agents: they turn one thing you want into small tickets, build each one, review each other's work and merge it."
+      "agent": "OpenWiz is a team of AI helpers that builds software for you: you tell me your idea in your own words, and they split it into small tasks, build each one, check each other's work and add it to your project."
     },
     {
       "step": "run",
@@ -289,7 +289,7 @@
     },
     {
       "step": "launch",
-      "agent": "The plan passed its checks, so the fleet started: 3 builders, each on one small ticket. Watch them work at openwiz.dev/app; nothing for you to do until the first merge."
+      "agent": "The plan passed its checks, so the helpers started: 3 AI helpers, each building one small task. Watch them work at openwiz.dev/app; there's nothing for you to do until the first piece is added to your project."
     },
     {
       "step": "watch",

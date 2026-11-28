@@ -177,8 +177,12 @@ For a start with role R and choice C:
    `adapters/<driver>/driver start`, with the ticket's repository and
    number, the role's skill, the harness `claude` for `claude-code` and any
    other provider as its id (as launch-fleet's host start passes it today),
-   and C's model id. Driver v1 takes no effort, so the start runs at the
-   harness's default effort, whatever C's effort says.
+   and C's model id. When C sets an effort, the start also sends it as
+   driver v1's `effort`, and only to a driver whose `version` `can` lists
+   `effort` (driver v1, E4). Through any other driver, or when the driver
+   refuses that effort, nothing starts: the start is never retried without
+   the effort. When C sets none, the start sends no `effort` and runs at the
+   host's default effort (driver v1, E2).
 
 ## How every entry writes
 
@@ -201,14 +205,15 @@ One rule, the same for every entry, of every kind:
    account, token or App of its own.
 4. **Records show the label.** The agent's status note's `harness` field is
    its label, `<name> via <person>` (such as `Demo Bot via syn-owner`). Its
-   `model` field names the effort the agent runs at, never only the one
-   configured: through driver v1, which applies none, it is
-   `<C's model name> default effort` (such as `Opus 5.5 default effort` for
-   a Builder row set to High), the model name as the Models table's Model
-   cell writes it. The field holds at most 60 characters (agent status v1),
-   so a model name over 45 characters is shown as its first 42 characters,
-   trailing spaces dropped, then `...`. A later driver version that applies
-   the effort lets the note name it.
+   `model` field names the effort the agent runs at: it is
+   `<C's model name> <effort> effort` (such as `Opus 5.5 high effort` for
+   a Builder row set to High), with C's effort as the start sends it, or
+   `<C's model name> default effort` only when C sets none. The model name
+   is as the Models table's Model cell writes it. The field holds at most
+   60 characters (agent status v1): when the note would be longer, the
+   model name is shown as its first characters, trailing spaces dropped,
+   then `...`, as many as leave the note 60 characters (its first 42 for
+   `default effort`, its first 43 for `medium effort`).
 5. **The person's own login** keeps approvals, repository settings and
    changes to `.github/workflows/` (github-identity.v1's roles).
 
@@ -256,8 +261,8 @@ person, and the request's `requester` and `repositories`), or `waits`:
 | `mixed/` | A harness, a host and a bot entry; table order; a harness entry skipped for another harness's choice |
 | `role-not-allowed/` | An entry never picked for a role it may not take; a role nobody may take waits; a models wait |
 | `other-user/` | A user project that isn't ours: its own person, App, repositories and token service, with a bot |
-| `namespaced/` | A namespaced model id driver v1 can't take waits; a Builder set to High whose note says `default effort` |
-| `long-model/` | Model names of 45 characters (shown whole: a 60-character note) and 46 (cut to `...`) |
+| `namespaced/` | A namespaced model id driver v1 can't take waits; a Builder set to High whose note says `high effort` |
+| `long-model/` | At medium effort, model names of 46 characters (shown whole: a 60-character note) and 47 (cut to `...`) |
 | `starting/` | KN22's starting Roster |
 | `no-roster/` | No Roster: starts as today |
 

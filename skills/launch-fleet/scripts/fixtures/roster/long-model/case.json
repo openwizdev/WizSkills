@@ -36,9 +36,9 @@
       "choice": {
         "harness": "Claude Code",
         "provider": "claude-code",
-        "model": "syn-model-45",
+        "model": "syn-model-46",
         "effort": "medium",
-        "model_name": "Synthetic Long Display Name For Edge Case 45x"
+        "model_name": "Synthetic Long Display Name For Edge Case 46xy"
       },
       "pick": {
         "name": "Claude Code",
@@ -46,11 +46,11 @@
         "driver": "local",
         "start": {
           "harness": "claude",
-          "model": "syn-model-45"
+          "model": "syn-model-46"
         },
         "note": {
           "harness": "Claude Code via syn-owner",
-          "model": "Synthetic Long Display Name For Edge Case 45x default effort"
+          "model": "Synthetic Long Display Name For Edge Case 46xy medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -74,9 +74,9 @@
       "choice": {
         "harness": "Codex",
         "provider": "codex",
-        "model": "syn-model-46",
+        "model": "syn-model-47",
         "effort": "medium",
-        "model_name": "Synthetic Long Display Name For Edge Case 46xy"
+        "model_name": "Synthetic Long Display Name For Edge Case 47xyz"
       },
       "pick": {
         "name": "Codex",
@@ -84,11 +84,11 @@
         "driver": "local",
         "start": {
           "harness": "codex",
-          "model": "syn-model-46"
+          "model": "syn-model-47"
         },
         "note": {
           "harness": "Codex via syn-owner",
-          "model": "Synthetic Long Display Name For Edge Case... default effort"
+          "model": "Synthetic Long Display Name For Edge Case 4... medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {

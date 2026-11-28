@@ -51,7 +51,7 @@
         },
         "note": {
           "harness": "Codex via syn-maker",
-          "model": "Sol 6.2 default effort"
+          "model": "Sol 6.2 medium effort"
         },
         "writes_as": "syn-maker's App",
         "token": {
@@ -89,7 +89,7 @@
         },
         "note": {
           "harness": "Helper Bot via syn-maker",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-maker's App",
         "token": {
@@ -127,7 +127,7 @@
         },
         "note": {
           "harness": "Helper Bot via syn-maker",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-maker's App",
         "token": {
@@ -164,7 +164,7 @@
         },
         "note": {
           "harness": "Helper Bot via syn-maker",
-          "model": "Sol 6.2 default effort"
+          "model": "Sol 6.2 medium effort"
         },
         "writes_as": "syn-maker's App",
         "token": {

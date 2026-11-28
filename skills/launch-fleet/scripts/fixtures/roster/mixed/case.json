@@ -69,7 +69,7 @@
         },
         "note": {
           "harness": "Demo Bot via syn-owner",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -107,7 +107,7 @@
         },
         "note": {
           "harness": "Claude Code via syn-owner",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -145,7 +145,7 @@
         },
         "note": {
           "harness": "Codex via syn-owner",
-          "model": "Sol 6.2 default effort"
+          "model": "Sol 6.2 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -183,7 +183,7 @@
         },
         "note": {
           "harness": "Claude Code via syn-owner",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -221,7 +221,7 @@
         },
         "note": {
           "harness": "Own computer via syn-owner",
-          "model": "Sol 6.2 default effort"
+          "model": "Sol 6.2 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {
@@ -258,7 +258,7 @@
         },
         "note": {
           "harness": "Own computer via syn-owner",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 medium effort"
         },
         "writes_as": "syn-owner's App",
         "token": {

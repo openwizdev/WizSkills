@@ -48,7 +48,7 @@
         },
         "note": {
           "harness": "Claude Code via syn-owner",
-          "model": "Opus 5.5 default effort"
+          "model": "Opus 5.5 high effort"
         },
         "writes_as": "syn-owner's App",
         "token": {

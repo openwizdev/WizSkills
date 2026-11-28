@@ -1,6 +1,6 @@
 # Fleet settings
 
-Synthetic fixture for the roster contract (`openwiz.roster.v1`): a namespaced model id driver v1 can't carry, and a configured effort the driver doesn't apply.
+Synthetic fixture for the roster contract (`openwiz.roster.v1`): a namespaced model id driver v1 can't carry, and a Builder's configured High effort, which its note names.
 
 ## Models
 

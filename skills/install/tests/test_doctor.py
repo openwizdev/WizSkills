@@ -518,6 +518,14 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                 for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
         self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
 
+    def test_preflight_supports_linux_arm_without_refusal(self):
+        text = SKILL.read_text()
+        preflight = text[text.index('## 1. Preflight'):text.index('## 2. Verified install')]
+        self.assertIn('`aarch64-unknown-linux-gnu`', preflight)
+        self.assertIn('0.1.1', preflight)
+        self.assertIn('refuse Linux on ARM', preflight)
+        self.assertNotIn('Linux on ARM is refused', preflight)
+
     def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
         text = SKILL.read_text()
         removal = text[text.index('## Recovery and removal'):]

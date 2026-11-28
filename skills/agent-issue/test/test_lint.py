@@ -41,12 +41,13 @@ def fence(info, obj):
     return '```%s\n%s\n```\n' % (info, json.dumps(obj, indent=2))
 
 
-def run(argv):
+def run(argv, parse_json=None):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         code = lint.main(argv)
     raw = out.getvalue()
-    data = json.loads(raw) if '--json' in argv and code != 2 else None
+    want_json = ('--json' in argv) if parse_json is None else parse_json
+    data = json.loads(raw) if want_json and code != 2 else None
     return code, raw, data
 
 
@@ -164,6 +165,74 @@ class IssueLint(unittest.TestCase):
         text = (SKILL / 'spec.md').read_text(encoding='utf-8')
         for word in lint.KINDS + lint.READIES + lint.EFFORTS + lint.GATES:
             self.assertIn('`' + word + '`', text)
+
+    def test_gates_rejects_unhashable_items(self):
+        for bad in ([{'name': 'release'}], [['release']], ['release', 'release']):
+            code, raw, data = lint_body(fence('agent-issue', issue(gates=bad)))
+            self.assertEqual(code, 1, raw)
+            self.assertEqual(rules(data), ['gates'])
+        code, raw, data = lint_body(fence('agent-issue', issue(gates=['release'])))
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+
+    def test_paths_allow_spaces(self):
+        body = issue(
+            owned_paths=['docs/Getting Started.md', 'docs/User Guides/'],
+            context=['docs/Getting Started.md'],
+        )
+        code, raw, data = lint_body(fence('agent-issue', body))
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+        for bad in ('docs/ /bad.md', 'docs/ bad.md', 'docs/bad /file.md', 'docs/Getting\tStarted.md'):
+            code, raw, data = lint_body(fence('agent-issue', issue(owned_paths=[bad])))
+            self.assertEqual(code, 1, raw)
+            self.assertEqual(rules(data), ['owned_paths'])
+
+    def test_record_inside_surrounding_fence_is_ignored(self):
+        inner = fence('agent-issue', issue())
+        for wrapped in (
+            '````markdown\n' + inner + '````\n',
+            '~~~markdown\n' + inner + '~~~\n',
+            '  ````markdown\n' + inner + '  ````\n',
+        ):
+            code, raw, data = lint_body(wrapped)
+            self.assertEqual(code, 1, raw)
+            self.assertIn('fence', rules(data))
+        inline_prose = '```agent-issue``` is the fence.\n' + inner
+        code, raw, data = lint_body(inline_prose)
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+
+    def test_switches_only_in_option_positions(self):
+        for flag in ('--help', '-h'):
+            code, raw, data = run([
+                '--json', 'title', '--title', '#14: wrong', '--issue-id', '14', '--expect', flag,
+            ])
+            self.assertEqual(code, 1, raw)
+            self.assertEqual(rules(data), ['title'])
+            code, raw, data = run([
+                '--json', 'title', '--title', '#14: ' + flag, '--issue-id', '14', '--expect', flag,
+            ])
+            self.assertEqual(code, 0, raw)
+            self.assertTrue(data['ok'])
+        code, raw, data = run([
+            '--json', 'title', '--title', '--help', '--issue-id', '14', '--expect', '--help',
+        ])
+        self.assertEqual(code, 1, raw)
+        self.assertEqual(rules(data), ['title'])
+        code, raw, _ = run([
+            'title', '--title', '#14: --json', '--issue-id', '14', '--expect', '--json',
+        ], parse_json=False)
+        self.assertEqual(code, 0, raw)
+        self.assertEqual(raw, 'agent-record: ok\n')
+        code, raw, data = run([
+            'title', '--title', '#14: --json', '--issue-id', '14', '--expect', '--json', '--json',
+        ], parse_json=True)
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+        code, raw, _ = run(['issue', '--help'], parse_json=False)
+        self.assertEqual(code, 0, raw)
+        self.assertIn('usage:', raw)
 
 
 if __name__ == '__main__':

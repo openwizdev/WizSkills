@@ -21,7 +21,7 @@ REPO = re.compile(r'^[a-z][a-z0-9_-]{0,40}$')
 LANE = re.compile(r'^[a-z][a-z0-9]{0,20}$')
 RISK = re.compile(r'^(low|medium|high)(?:: \S(?:.*\S)?)?$')
 HEADER = re.compile(r'^Review #([1-9][0-9]{0,9}) at ([0-9a-f]{7})$')
-FINDING = re.compile(r'^- (blocking|nit) (\S+):([1-9][0-9]*): (.+) Fix: (\S.*)$')
+LINE_NO = re.compile(r'^[1-9][0-9]*$')
 VERDICT = re.compile(r'^VERDICT: (APPROVE|CHANGES) at ([0-9a-f]{7})$')
 SECRET = re.compile(
     r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----'
@@ -70,16 +70,16 @@ def good_id(value):
 def good_path(path):
     if not isinstance(path, str) or not path or path != path.strip() or '\\' in path or path.startswith('/'):
         return False
-    if not re.fullmatch(r'[A-Za-z0-9._@][A-Za-z0-9._@/-]*', path):
+    if not re.fullmatch(r'[A-Za-z0-9._@][A-Za-z0-9._@ /-]*', path):
         return False
     parts = path[:-1].split('/') if path.endswith('/') else path.split('/')
-    return bool(parts) and all(part not in ('', '.', '..') for part in parts)
+    return bool(parts) and all(part not in ('', '.', '..') and part == part.strip() for part in parts)
 
 
 def covered(owned, path):
     for prefix in owned:
         if prefix.endswith('/'):
-            if path.startswith(prefix) or path + '/' == prefix:
+            if path.startswith(prefix):
                 return True
         elif path == prefix:
             return True
@@ -174,26 +174,55 @@ def closer(line, mark):
     return len(token) >= len(mark) and token.startswith(mark) and set(token) == {mark[0]}
 
 
+def fence_opener(line):
+    stripped = line.lstrip(' ')
+    if len(line) - len(stripped) > 3 or not stripped or stripped[0] not in '`~':
+        return None
+    char, n = stripped[0], 0
+    while n < len(stripped) and stripped[n] == char:
+        n += 1
+    if n < 3:
+        return None
+    if char == '`' and '`' in stripped[n:]:
+        return None
+    return stripped[:n]
+
+
+def fence_closer(line, mark):
+    stripped = line.lstrip(' ')
+    if len(line) - len(stripped) > 3:
+        return False
+    token = stripped.rstrip(' \t')
+    return len(token) >= len(mark) and token.startswith(mark) and set(token) == {mark[0]}
+
+
 def extract(text, info):
     lines = text.splitlines()
     records, inside, unclosed, i = [], set(), None, 0
     while i < len(lines):
         mark = opener(lines[i], info)
-        if not mark:
+        if mark:
+            start = i
+            i += 1
+            body = []
+            while i < len(lines) and not closer(lines[i], mark):
+                body.append(lines[i])
+                i += 1
+            if i >= len(lines):
+                unclosed = start + 1
+                inside.update(range(start, len(lines)))
+                break
+            inside.update(range(start, i + 1))
+            records.append((start + 1, '\n'.join(body)))
             i += 1
             continue
-        start = i
-        i += 1
-        body = []
-        while i < len(lines) and not closer(lines[i], mark):
-            body.append(lines[i])
+        outer = fence_opener(lines[i])
+        if outer:
             i += 1
-        if i >= len(lines):
-            unclosed = start + 1
-            inside.update(range(start, len(lines)))
-            break
-        inside.update(range(start, i + 1))
-        records.append((start + 1, '\n'.join(body)))
+            while i < len(lines) and not fence_closer(lines[i], outer):
+                i += 1
+            i += 1
+            continue
         i += 1
     prose = sum(1 for n, line in enumerate(lines) if n not in inside and line.strip())
     return records, prose, unclosed
@@ -288,8 +317,9 @@ def gates_of(bag, obj):
     if 'gates' not in obj:
         return None
     value = obj['gates']
-    if (not isinstance(value, list) or len(value) != len(set(value))
-            or any(not isinstance(item, str) or item not in GATES for item in value)):
+    if (not isinstance(value, list)
+            or any(not isinstance(item, str) or item not in GATES for item in value)
+            or len(value) != len(set(value))):
         bag.add('gates', 'must list only release, secrets, auth, ci-permissions, migration, spending', 'gates')
         return None
     return value
@@ -514,6 +544,24 @@ def lint_pr(text, issue_text=None, mode='ready'):
     return findings + issue_findings
 
 
+def parse_finding(line):
+    if not line.startswith('- '):
+        return None
+    severity, sep, rest = line[2:].partition(' ')
+    if not sep or severity not in ('blocking', 'nit') or rest.startswith(' '):
+        return None
+    if rest.count(' Fix: ') != 1:
+        return None
+    head, fix = rest.split(' Fix: ', 1)
+    loc, sep, issue_text = head.partition(': ')
+    if not sep or ':' not in loc or not issue_text or not fix or fix[0].isspace():
+        return None
+    path, line_no = loc.rsplit(':', 1)
+    if not path or not LINE_NO.fullmatch(line_no):
+        return None
+    return severity, path, line_no, issue_text, fix
+
+
 def lint_review(text):
     text, bom = normalize(text)
     findings = []
@@ -535,15 +583,16 @@ def lint_review(text):
         findings.append(finding('body', content[-1][0], 'verdict', 'header sha and verdict sha differ'))
     blocking = 0
     for n, line in content[1:-1] if verdict else content[1:]:
-        match = FINDING.fullmatch(line)
-        if not match or line.count(' Fix: ') != 1:
+        parsed = parse_finding(line)
+        if not parsed:
             findings.append(finding('body', n, 'finding', 'must be severity, file:line, issue, and Fix'))
             continue
-        if not good_path(match.group(2)):
+        severity, path, _, issue_text, fix = parsed
+        if not good_path(path):
             findings.append(finding('body', n, 'finding', 'path must stay inside the repository'))
-        if problem(match.group(4), 1, 200) or problem(match.group(5), 1, 200):
+        if problem(issue_text, 1, 200) or problem(fix, 1, 200):
             findings.append(finding('body', n, 'finding', 'issue and fix must each be one line'))
-        if match.group(1) == 'blocking':
+        if severity == 'blocking':
             blocking += 1
     if verdict and verdict.group(1) == 'APPROVE' and blocking:
         findings.append(finding('body', content[-1][0], 'verdict', 'APPROVE requires zero blocking findings'))
@@ -618,66 +667,72 @@ def read_text(path):
         raise RecordError('%s: unreadable' % path) from exc
 
 
-def options(argv, required, optional):
+def options(argv, required, optional, as_json):
     opts, i = {}, 0
     while i < len(argv):
         key = argv[i]
+        if key in ('-h', '--help'):
+            return 'help', as_json
+        if key == '--json':
+            as_json = True
+            i += 1
+            continue
         if key not in required | optional or i + 1 >= len(argv):
-            return None
+            return None, as_json
         opts[key] = argv[i + 1]
         i += 2
     if not required <= set(opts):
-        return None
-    return opts
+        return None, as_json
+    return opts, as_json
 
 
 def main(argv):
-    as_json = False
-    args = []
-    for arg in argv:
-        if arg == '--json':
+    as_json, i = False, 0
+    while i < len(argv):
+        if argv[i] == '--json':
             as_json = True
-        elif arg in ('-h', '--help'):
+            i += 1
+        elif argv[i] in ('-h', '--help'):
             print(USAGE, end='')
             return 0
         else:
-            args.append(arg)
-    if not args:
+            break
+    if i >= len(argv):
         print(USAGE, end='', file=sys.stderr)
         return 2
-    cmd, rest = args[0], args[1:]
+    cmd, rest = argv[i], argv[i + 1:]
+    specs = {
+        'issue': ({'--body-file'}, set()),
+        'pr': ({'--body-file'}, {'--issue-file', '--mode'}),
+        'review': ({'--body-file'}, set()),
+        'branch': ({'--name'}, {'--repo', '--issue-id'}),
+        'title': ({'--title', '--issue-id'}, {'--expect'}),
+    }
+    if cmd not in specs:
+        print(USAGE, end='', file=sys.stderr)
+        return 2
+    required, optional = specs[cmd]
+    opts, as_json = options(rest, required, optional, as_json)
+    if opts == 'help':
+        print(USAGE, end='')
+        return 0
     try:
+        if opts is None:
+            raise RecordError('usage')
         if cmd == 'issue':
-            opts = options(rest, {'--body-file'}, set())
-            if opts is None:
-                raise RecordError('usage')
             findings = lint_issue(read_text(opts['--body-file']))
         elif cmd == 'pr':
-            opts = options(rest, {'--body-file'}, {'--issue-file', '--mode'})
-            if opts is None:
-                raise RecordError('usage')
             mode = opts.get('--mode', 'ready')
             if mode not in ('ready', 'draft'):
                 raise RecordError('usage')
             issue = read_text(opts['--issue-file']) if '--issue-file' in opts else None
             findings = lint_pr(read_text(opts['--body-file']), issue, mode)
         elif cmd == 'review':
-            opts = options(rest, {'--body-file'}, set())
-            if opts is None:
-                raise RecordError('usage')
             findings = lint_review(read_text(opts['--body-file']))
         elif cmd == 'branch':
-            opts = options(rest, {'--name'}, {'--repo', '--issue-id'})
-            if opts is None:
-                raise RecordError('usage')
             findings = lint_branch(opts['--name'], opts.get('--repo'), opts.get('--issue-id'))
-        elif cmd == 'title':
-            opts = options(rest, {'--title', '--issue-id'}, {'--expect'})
-            if opts is None:
-                raise RecordError('usage')
-            findings = lint_title(opts['--title'], opts['--issue-id'], opts.get('--expect'))
         else:
-            raise RecordError('usage')
+            findings = lint_title(opts['--title'], opts['--issue-id'], opts.get('--expect'))
     except RecordError as exc:
         print(USAGE if str(exc) == 'usage' else str(exc), end='' if str(exc) == 'usage' else '\n', file=sys.stderr)
         return 2

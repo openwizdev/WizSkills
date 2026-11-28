@@ -6,11 +6,11 @@ Field rules stay in [spec.md](spec.md). The pull request record stays in [agent-
 
 ## GitHub
 
-An issue or pull request description holds the fence. The title follows the title rule. A review is one pull request comment, not a line thread and not the Approve button. Read the head sha, the required checks on that sha, and whether the pull request can merge. `Closes #N` may sit outside the fence. `closes` in the record is authoritative. Merge through the merge queue when the repository has one.
+An issue or pull request description holds the fence. The title follows the title rule. A review is one pull request comment, not a line thread and not the Approve button. Read the head sha, the required checks on that sha, and whether the pull request can merge. The JSON `closes` field does not link the issue natively; put `Closes #N` on its own line outside the fence before merge (within the three-line prose limit), while `closes` in the record stays authoritative. Merge through the merge queue when the repository has one. After merge, verify issue `#N` is closed; if GitHub left it open, close it.
 
 ## GitLab
 
-A merge request description holds the fence. The review is one note on that merge request. The pipeline that counts is the one for the head sha in the verdict. Merge when that pipeline succeeded and GitLab reports the merge request can merge.
+A merge request description holds the fence. The review is one note on that merge request. The pipeline that counts is the one for the head sha in the verdict. The JSON `closes` field does not link the issue natively; put `Closes #N` on its own line outside the fence before merge (within the three-line prose limit), while `closes` in the record stays authoritative. Merge when that pipeline succeeded and GitLab reports the merge request can merge. After merge, verify issue `#N` is closed; if GitLab left it open, close it.
 
 ## Cursor Origin
 

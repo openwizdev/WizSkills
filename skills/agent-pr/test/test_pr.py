@@ -63,12 +63,12 @@ def fence(info, obj):
     return '```%s\n%s\n```\n' % (info, json.dumps(obj, indent=2))
 
 
-def run(argv):
+def run(argv, parse_json=True):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         code = lint.main(argv)
     raw = out.getvalue()
-    data = json.loads(raw) if code != 2 else None
+    data = json.loads(raw) if parse_json and code != 2 else None
     return code, raw, data
 
 
@@ -182,6 +182,56 @@ class PullRequestLint(unittest.TestCase):
         self.assertIn('CHANGES', text)
         self.assertIn('blocking', text)
         self.assertIn('nit', text)
+
+    def test_pr_gates_rejects_unhashable_items(self):
+        code, raw, data = lint_pr(fence('agent-pr', pull(gates=[{'name': 'release'}])))
+        self.assertEqual(code, 1, raw)
+        self.assertEqual(rules(data), ['gates'])
+
+    def test_directory_grant_requires_slash(self):
+        docs_issue = fence('agent-issue', issue(owned_paths=['docs/']))
+        code, raw, data = lint_pr(fence('agent-pr', pull(owned_paths=['docs'])), docs_issue)
+        self.assertEqual(code, 1, raw)
+        self.assertEqual(rules(data), ['owned_paths'])
+        code, raw, data = lint_pr(fence('agent-pr', pull(owned_paths=['docs/Getting Started.md'])), docs_issue)
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+
+    def test_review_accepts_paths_with_spaces(self):
+        good = (
+            'Review #15 at abc1234\n\n'
+            '- blocking docs/Getting Started.md:12: Link breaks at foo:20: invalid. Fix: Update docs/Getting Started.md.\n\n'
+            'VERDICT: CHANGES at abc1234\n'
+        )
+        code, raw, data = lint_review(good)
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
+        bad = (
+            'Review #15 at abc1234\n\n'
+            '- blocking ../docs/Getting Started.md:12: Escapes repo. Fix: Keep inside.\n\n'
+            'VERDICT: CHANGES at abc1234\n'
+        )
+        code, raw, data = lint_review(bad)
+        self.assertEqual(code, 1, raw)
+        self.assertEqual(rules(data), ['finding'])
+
+    def test_pr_inside_surrounding_fence_is_ignored(self):
+        wrapped = '````markdown\n' + fence('agent-pr', pull()) + '````\n'
+        code, raw, data = lint_pr(wrapped)
+        self.assertEqual(code, 1, raw)
+        self.assertIn('fence', rules(data))
+
+    def test_forges_document_native_issue_link_and_close_check(self):
+        text = (ISSUE / 'forges.md').read_text(encoding='utf-8')
+        github = text.split('## GitHub', 1)[1].split('## GitLab', 1)[0]
+        gitlab = text.split('## GitLab', 1)[1].split('## Cursor Origin', 1)[0]
+        for section in (github, gitlab):
+            self.assertIn('Closes #N', section)
+            self.assertIn('outside the fence', section)
+            self.assertIn('After merge', section)
+        code, raw, data = lint_pr('Closes #14\n\n' + fence('agent-pr', pull()), fence('agent-issue', issue()))
+        self.assertEqual(code, 0, raw)
+        self.assertTrue(data['ok'])
 
 
 if __name__ == '__main__':

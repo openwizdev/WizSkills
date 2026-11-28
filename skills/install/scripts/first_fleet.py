@@ -2182,6 +2182,36 @@ def reviewer_of(found, choice, offered, driver):
     return reviewer, None
 
 
+def ensure_routing(directory, repo, existing):
+    folder = Path(directory) / 'fleet-routing'
+    needed = [(key, filename, field) for key, filename, field in (
+        ('LAUNCH_FLEET_STATE', 'threads.json', 'threads'),
+        ('LAUNCH_FLEET_LOOPS', 'loops.json', 'loops'),
+    ) if not existing.get(key)]
+    if not needed:
+        return {}
+    try:
+        folder.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
+    except OSError:
+        raise Exit(10, 'Could not create the private routing files; ' + NOTHING)
+    env = {}
+    for key, filename, field in needed:
+        path = folder / filename
+        if not path.exists():
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                    json.dump({'repo': repo, field: {}}, handle)
+                    handle.write('\n')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except OSError:
+                raise Exit(10, 'Could not create the private routing files; ' + NOTHING)
+        env[key] = str(path.resolve())
+    return env
+
+
 def repository(recorded):
     """The environment for every read and run, once the checkout is the recorded repository."""
     if not recorded:
@@ -2441,6 +2471,9 @@ def launch(got):
     if not choices or choices.get('agents') != host['agents']:
         raise Exit(5, 'The harness, model and effort are not chosen for where agents run yet (choose); ' + NOTHING)
     env = repository(state.value.get('repo'))
+    for key, value in ensure_routing(state.path.parent, state.value['repo'], env).items():
+        if not env.get(key):
+            env[key] = value
     agents_host = host['agents']
     driver = agents_host != 'cloud'
     local = agents_host == 'local'

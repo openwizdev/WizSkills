@@ -44,6 +44,8 @@ SUITES = {
                     ['python3', '-I', 'skills/dream-cycle/test/test_links.py']],
     'where-are-we': [['python3', '-I', 'skills/where-are-we/test/test_read_github.py']],
     'handoff': [['python3', '-I', 'skills/handoff/test/test_handoff.py']],
+    'agent-issue': [['python3', '-I', 'skills/agent-issue/test/test_lint.py']],
+    'agent-pr': [['python3', '-I', 'skills/agent-pr/test/test_pr.py']],
     'ask-wiz': [['python3', '-I', 'skills/ask-wiz/test/test_routes.py']],
     'hill-climb': [['python3', '-I', '-m', 'unittest', 'discover', '-s', 'skills/hill-climb/tests']],
     'setup': [['python3', '-I', 'skills/setup/scripts/test_settings.py']],
@@ -87,6 +89,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-overload.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-gitread.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-ghcache.py'],
@@ -101,7 +104,8 @@ SUITES = {
               ['python3', '-I', 'check/test_checklist_rules.py'],
               ['python3', '-I', 'check/test_context_budget.py'],
               ['python3', '-I', 'check/test_packaged_imports.py'],
-              ['python3', '-I', 'check/test_packaged_scripts.py']],
+              ['python3', '-I', 'check/test_packaged_scripts.py'],
+              ['python3', '-I', 'check/test_checkpoints_authority.py']],
 }
 
 PARTS = {'launch-fleet': (['sh', 'skills/launch-fleet/scripts/test.sh'], 14)}
@@ -118,6 +122,8 @@ def rows():
 # SKILL.md carries exactly, on a line of its own, instead of his notice.
 ORIGINAL = "**Source:** new, original to OpenWiz. Not adapted from Matt Pocock's skills."
 SOURCE_LINES = {
+    'agent-issue': ORIGINAL,
+    'agent-pr': ORIGINAL,
     'dream-cycle': ORIGINAL,
     'role-call': ORIGINAL,
     'feedback': ORIGINAL,
@@ -125,6 +131,7 @@ SOURCE_LINES = {
     'huntr': ORIGINAL,
     'image': ORIGINAL,
     'install': ORIGINAL,
+    'jev': ORIGINAL,
     'son-of-anton': ORIGINAL,
     'write-driver': ORIGINAL,
     'where-are-we': "**Source:** dot-context's written plan. Not adapted from Matt Pocock's skills.",

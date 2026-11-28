@@ -134,6 +134,29 @@ class Gate(unittest.TestCase):
             r.write('skills/beta/SKILL.md', skill_md('beta', None))
         self.assertEqual(self.pr(change), (0, ['changeset check: pass (no skill changed)']))
 
+    def test_a_brief_stamp_only_update_passes_only_with_matching_plugin_bump(self):
+        brief = "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.0'\n"
+        cases = (
+            ('matching bump', '0.2.1', "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.1'\n", 0),
+            ('no plugin bump', None, "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.1'\n", 1),
+            ('mismatched stamp', '0.2.1', "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.2'\n", 1),
+            ('plugin downgrade', '0.1.9', "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.1.9'\n", 1),
+            ('extra brief edit', '0.2.1', "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.1'\nX = 1\n", 1),
+        )
+        for label, plugin_version, new_brief, expected in cases:
+            with self.subTest(case=label):
+                skills = {'alpha': '0.2.0', 'launch-fleet': '0.2.0'}
+                repo = Repo(self, skills, plugin='0.2.0')
+                repo.write('skills/launch-fleet/scripts/brief.py', brief)
+                repo.commit('add brief')
+                repo.branch()
+                if plugin_version is not None:
+                    repo.plugin(plugin_version, skills)
+                repo.write('skills/launch-fleet/scripts/brief.py', new_brief)
+                repo.commit('topic')
+                code, out = repo.run('check', '--base', 'main')
+                self.assertEqual(code, expected, out)
+
     def test_a_mode_only_skill_md_edit_needs_a_changeset(self):
         def change(r):
             (r.dir / 'skills/alpha/SKILL.md').chmod(0o755)
@@ -297,6 +320,29 @@ class Release(unittest.TestCase):
         status = repo.git('status', '--porcelain').splitlines()
         self.assertEqual(sorted(status), [' D .changeset/one.md', ' M .claude-plugin/plugin.json',
                                           ' M CHANGELOG.md', ' M skills/alpha/SKILL.md'])
+
+    def test_write_stamps_the_brief_clone_version(self):
+        repo = Repo(self, {'alpha': '0.2.0'}, plugin='0.2.0')
+        repo.write('skills/launch-fleet/scripts/brief.py', "WIZSKILLS_VERSION = '0.2.0'\n")
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        code, out = self.release(repo, '--write')
+        self.assertEqual(code, 0, out)
+        self.assertEqual((repo.dir / 'skills/launch-fleet/scripts/brief.py').read_text(),
+                         "WIZSKILLS_VERSION = '0.2.1'\n")
+
+    def test_generated_release_diff_passes_the_changeset_gate(self):
+        repo = Repo(self, {'alpha': '0.2.0', 'launch-fleet': '0.2.0'}, plugin='0.2.0')
+        repo.write('skills/launch-fleet/scripts/brief.py',
+                   "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.0'\n")
+        repo.note('one', {'alpha': 'patch'}, 'Fixes a typo.')
+        repo.commit('pending')
+        repo.branch()
+        code, out = repo.run('release', '--date', '2026-01-02', '--write')
+        self.assertEqual(code, 0, out)
+        self.assertEqual((repo.dir / 'skills/launch-fleet/scripts/brief.py').read_text(),
+                         "from pathlib import Path\n\nWIZSKILLS_VERSION = '0.2.1'\n")
+        repo.commit('release 0.2.1')
+        self.assertEqual(repo.run('check', '--base', 'main'), (0, ['changeset check: pass (no skill changed)']))
 
     def test_a_bad_marketplace_leaves_versions_and_notes_unchanged(self):
         for text in ('{}\n', '{"plugins":[]}\n', 'not json\n', '{"plugins":[1]}\n', '[]\n',

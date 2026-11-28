@@ -4,6 +4,8 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 
 | Skill |
 | --- |
+| [`agent-issue`](agent-issue/SKILL.md) |
+| [`agent-pr`](agent-pr/SKILL.md) |
 | [`ask-wiz`](ask-wiz/SKILL.md) |
 | [`build-ticket`](build-ticket/SKILL.md) |
 | [`diagnose`](diagnose/SKILL.md) |
@@ -15,6 +17,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`huntr`](huntr/SKILL.md) |
 | [`image`](image/SKILL.md) |
 | [`install`](install/SKILL.md) |
+| [`jev`](jev/SKILL.md) |
 | [`launch-fleet`](launch-fleet/SKILL.md) |
 | [`research`](research/SKILL.md) |
 | [`review-ticket`](review-ticket/SKILL.md) |
@@ -24,6 +27,7 @@ One folder for each skill: `skills/<name>/SKILL.md`, its `agents/openai.yaml`, a
 | [`to-spec`](to-spec/SKILL.md) |
 | [`to-tickets`](to-tickets/SKILL.md) |
 | [`triage`](triage/SKILL.md) |
+| [`wait-what`](wait-what/SKILL.md) |
 | [`wayfind`](wayfind/SKILL.md) |
 | [`where-are-we`](where-are-we/SKILL.md) |
 | [`write-driver`](write-driver/SKILL.md) |

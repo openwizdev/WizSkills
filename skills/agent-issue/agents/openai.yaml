@@ -1,0 +1,3 @@
+interface:
+  display_name: "Agent issue"
+  short_description: "File one machine-readable issue any repository can execute"

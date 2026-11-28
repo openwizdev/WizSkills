@@ -22,6 +22,9 @@ CHANGESETS = 'node_modules/@changesets/cli/bin.js'
 IGNORED = ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
 IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'
 FIRST = '0.2.0'
+BRIEF = 'skills/launch-fleet/scripts/brief.py'
+PLUGIN = '.claude-plugin/plugin.json'
+STAMP = re.compile(r"(?m)^(WIZSKILLS_VERSION = ')([^']+)(')$")
 
 
 class Unusable(Exception):
@@ -101,6 +104,42 @@ def blobs(ref):
     return out
 
 
+def git_show(ref, rel):
+    p = subprocess.run(['git', 'show', f'{ref}:{rel}'], cwd=ROOT, capture_output=True)
+    if p.returncode:
+        return None
+    try:
+        return p.stdout.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+
+
+def plugin_version_at(ref):
+    text = git_show(ref, PLUGIN)
+    if text is None:
+        return None
+    try:
+        version = json.loads(text).get('version')
+    except (ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and PLAIN.fullmatch(version) else None
+
+
+def brief_stamp_release(merge_base):
+    old_plugin, new_plugin = plugin_version_at(merge_base), plugin_version_at('HEAD')
+    if not old_plugin or not new_plugin:
+        return False
+    if tuple(map(int, new_plugin.split('.'))) <= tuple(map(int, old_plugin.split('.'))):
+        return False
+    old_brief, new_brief = git_show(merge_base, BRIEF), git_show('HEAD', BRIEF)
+    if old_brief is None or new_brief is None:
+        return False
+    old_match, new_match = STAMP.search(old_brief), STAMP.search(new_brief)
+    if not old_match or not new_match or new_match.group(2) != new_plugin:
+        return False
+    return STAMP.sub(lambda m: m.group(1) + new_plugin + m.group(3), old_brief, count=1) == new_brief
+
+
 def check(base):
     merge_base = git('merge-base', base, 'HEAD').strip()
     head_skills = tree_skills('HEAD')
@@ -115,6 +154,8 @@ def check(base):
         if rel == f'skills/{name}/SKILL.md' and name in head_skills and rel in before:
             if without_version(git('show', f'{merge_base}:{rel}')) == without_version(git('show', f'HEAD:{rel}')):
                 continue
+        if rel == BRIEF and name in head_skills and rel in before and brief_stamp_release(merge_base):
+            continue
         changed.add(name)
     refusals, named = [], set()
     added = {p for p in git('diff', '--name-only', '--no-renames', '--diff-filter=A', '-z', merge_base, 'HEAD',
@@ -159,17 +200,14 @@ def skill_version(path):
     return found[0].group(1)
 
 
-STAMP = re.compile(r"(?m)^(WIZSKILLS_VERSION = ')([^']+)(')$")
-
-
 def stamp_brief(version):
-    path = ROOT / 'skills/launch-fleet/scripts/brief.py'
+    path = ROOT / BRIEF
     if not path.is_file():
         return
     text = path.read_text(encoding='utf-8')
     match = STAMP.search(text)
     if match is None:
-        raise Unusable('skills/launch-fleet/scripts/brief.py has no WIZSKILLS_VERSION stamp')
+        raise Unusable(f'{BRIEF} has no WIZSKILLS_VERSION stamp')
     if match.group(2) == version:
         return
     path.write_text(STAMP.sub(lambda found: found.group(1) + version + found.group(3), text, count=1),

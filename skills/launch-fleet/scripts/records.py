@@ -111,6 +111,9 @@ def builder_thread(n, branch, threads, state, runs=None):
     matches = [t for t in threads or [] if isinstance(t.get('title'), str)
                and t['title'].startswith(f'#{n}: ')
                and (branch is None or t.get('branch') == branch)]
+    live = [t for t in matches if not t.get('archivedAt') and not t.get('archived')]
+    if live:
+        matches = live
     found, error = choose(f'builder:{n}', matches, state, threads)
     if runs is UNSET and error == f'no thread matches builder:{n}':
         error += ', and no private run map LAUNCH_FLEET_RUNS was restored'

@@ -15,14 +15,14 @@ QUOTA_ERROR = re.compile(
 )
 ISO_RESET = re.compile(
     r"(?:resets?(?:\s+at)?|try again(?:\s+at)?)\s*[:·-]?\s*"
-    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2}))",
+    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2}))",
     re.I,
 )
 REL_RESET = re.compile(
-    r"(?:resets?|try again)\s+in\s+((?:[0-9]+\s*[dhms]\b[\s,]*)+)",
+    r"(?:resets?|try again)\s+in\s+((?:[0-9]+\s*[dhms](?![A-Za-z])[\s,]*)+)",
     re.I,
 )
-PART = re.compile(r"([0-9]+)\s*([dhms])\b", re.I)
+PART = re.compile(r"([0-9]+)\s*([dhms])(?![A-Za-z])", re.I)
 UNIT = {'d': 86400, 'h': 3600, 'm': 60, 's': 1}
 
 
@@ -32,14 +32,17 @@ def parse_reset(text, now):
         raw = m.group(1)
         try:
             dt = datetime.fromisoformat(raw.replace('Z', '+00:00')).astimezone(timezone.utc)
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
         return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
     m = REL_RESET.search(text)
     if m:
         secs = sum(int(n) * UNIT[u.lower()] for n, u in PART.findall(m.group(1)))
         if secs > 0:
-            dt = datetime.fromtimestamp(now, tz=timezone.utc) + timedelta(seconds=secs)
+            try:
+                dt = datetime.fromtimestamp(now, tz=timezone.utc) + timedelta(seconds=secs)
+            except (ValueError, OverflowError, OSError):
+                return None
             return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
     return None
 
@@ -63,10 +66,14 @@ def main(argv=None):
     p.add_argument('--now', type=int, default=None)
     p.add_argument('--file', default=None)
     args = parser.parse_args(argv)
-    if args.file is not None:
-        text = Path(args.file).read_text(encoding='utf-8', errors='replace')
-    else:
-        text = sys.stdin.read()
+    try:
+        if args.file is not None:
+            text = Path(args.file).read_text(encoding='utf-8', errors='replace')
+        else:
+            text = sys.stdin.read()
+    except OSError as error:
+        print(f'quota: could not read input: {error.strerror or error}', file=sys.stderr)
+        return 2
     record = detect(text, now=args.now)
     if record is None:
         print('ok')

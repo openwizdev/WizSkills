@@ -44,6 +44,24 @@ class GitHubEventsContractTests(unittest.TestCase):
                 specs = [int(line.removeprefix("check spec ")) for line in expected["stdout"]]
                 self.assertEqual(specs, sorted(set(specs)))
 
+    def test_router_command_with_header_and_body_files(self):
+        contract = (CONTRACTS / "github-events.v1.md").read_text(encoding="utf-8")
+        invocation = contract.partition("\n## Router command\n")[2].split("\n## ", 1)[0]
+        self.assertIn(
+            "`skills/launch-fleet/scripts/events.py --headers <file> --body <file>`",
+            invocation,
+            "the router command must accept explicit header and body files",
+        )
+
+    def test_router_command_with_body_on_stdin(self):
+        contract = (CONTRACTS / "github-events.v1.md").read_text(encoding="utf-8")
+        invocation = contract.partition("\n## Router command\n")[2].split("\n## ", 1)[0]
+        self.assertRegex(
+            invocation,
+            r"(?m)^- Without headers, .*`skills/launch-fleet/scripts/events\.py`.*standard input",
+            "the router command must accept a body on stdin when headers are unavailable",
+        )
+
     def test_schema_rejects_malformed_outputs(self):
         schema = self.schema()
         for malformed in (
@@ -52,6 +70,7 @@ class GitHubEventsContractTests(unittest.TestCase):
             {"exit_code": 0, "stdout": ["check spec 82\n"]},
             {"exit_code": 0, "stdout": ["check spec 82\ncheck spec 1008"]},
             {"exit_code": 0, "stdout": ["check spec 0"]},
+            {"exit_code": 0, "stdout": ["check spec 82", "check spec 82"]},
             {"exit_code": 2, "stdout": ["check spec 82"]},
             {"exit_code": 1, "stdout": []},
         ):

@@ -566,9 +566,20 @@ class Failures(unittest.TestCase):
 
     def test_a_refused_start_is_tried_three_times_with_backoff_then_reported_once(self):
         p = Project(self)
-        began = time.monotonic()
+        stamps = p.dir / 'driver-times.log'
+        timed = p.dir / 'timed-driver.py'
+        timed.write_text('import runpy, time\n'
+                         'with open(%r, "a") as f:\n'
+                         '    f.write("%%r\\n" %% time.monotonic())\n'
+                         'runpy.run_path(%r, run_name="__main__")\n'
+                         % (str(stamps), str(HERE / 'fixtures/driver.py')))
+        (p.dir / 'adapters/local/driver').write_text(
+            '#!/bin/sh\nFAKE_DRIVER_HOST=local exec "%s" -I "%s" "$@"\n' % (sys.executable, timed))
         code, out, _ = p.host('start', REPO, 7, 'claude', 'm', FAKE_DRIVER_MODE='refuse')
-        self.assertGreaterEqual(time.monotonic() - began, 3, 'two waits, of 1 and 2 seconds')
+        times = [float(line) for line in stamps.read_text().splitlines()]
+        self.assertEqual(len(times), 3)
+        self.assertGreaterEqual(times[1] - times[0], 1, 'first retry waits 1 second')
+        self.assertGreaterEqual(times[2] - times[1], 2, 'second retry waits 2 seconds')
         self.assertEqual((code, out), (1, '%s: the local driver refused #7\'s start 3 times; next: %s' % (STOPPED, NEXT)))
         self.assertEqual([c['command'] for c in p.calls()], ['start'] * 3)
         self.assertIsNone(p.saved())

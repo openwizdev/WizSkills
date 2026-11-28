@@ -14,7 +14,7 @@ HOME = 'synthetic-org/project'
 SAT = 'synthetic-org/skills'
 
 FAKE_GH = r'''
-import json, os, sys
+import json, os, re, sys
 world = json.load(open(os.environ['FAKE_WORLD']))
 with open(os.environ['FAKE_LOG'], 'a') as log:
     log.write(json.dumps(sys.argv[1:]) + '\n')
@@ -25,12 +25,39 @@ fields = dict(a.split('=', 1) for a in sys.argv[3:] if '=' in a)
 if '%s/%s' % (fields.get('o'), fields.get('n')) != world['repo']:
     print('gh: wrong repository', file=sys.stderr)
     sys.exit(1)
+query = ' '.join(fields.get('query', '').split())
+outer = re.fullmatch(
+    r'query\s*\(\s*\$o\s*:\s*String!\s*,?\s*\$n\s*:\s*String!\s*\)\s*'
+    r'\{\s*repository\s*\(\s*owner\s*:\s*\$o\s*,?\s*name\s*:\s*\$n\s*\)\s*\{\s*(.+?)\s*\}\s*\}',
+    query)
+if not outer:
+    print('GraphQL: invalid query envelope', file=sys.stderr)
+    sys.exit(1)
+item_re = re.compile(
+    r'([A-Za-z_][A-Za-z0-9_]*)\s*:\s*issueOrPullRequest\s*\(\s*number\s*:\s*([1-9][0-9]*)\s*\)\s*\{'
+    r'\s*__typename\s+\.\.\.\s*on\s+PullRequest\s*\{'
+    r'\s*closingIssuesReferences\s*\(\s*first\s*:\s*([1-9][0-9]*)\s*\)\s*\{'
+    r'\s*pageInfo\s*\{\s*hasNextPage\s*\}\s*'
+    r'nodes\s*\{\s*number\s+repository\s*\{\s*nameWithOwner\s*\}\s*\}\s*'
+    r'\}\s*\}\s*\}\s*')
+pos, body, asked, seen = 0, outer.group(1), [], set()
+while pos < len(body):
+    m = item_re.match(body, pos)
+    if not m or m.group(1) in seen or int(m.group(3)) > 100:
+        print('GraphQL: invalid closing-reference selection', file=sys.stderr)
+        sys.exit(1)
+    seen.add(m.group(1))
+    asked.append((m.group(1), int(m.group(2))))
+    pos = m.end()
+if not asked:
+    print('GraphQL: empty selection', file=sys.stderr)
+    sys.exit(1)
 items, errors = {}, []
-for number in world['asked']:
+for alias, number in asked:
     item = world['items'].get(str(number))
-    items['i%d' % number] = item
+    items[alias] = item
     if item is None:
-        errors.append({'type': 'NOT_FOUND', 'path': ['repository', 'i%d' % number]})
+        errors.append({'type': 'NOT_FOUND', 'path': ['repository', alias]})
 if world.get('error'):
     errors.append({'type': world['error'], 'message': 'synthetic %s' % world['error']})
 print(json.dumps({'data': {'repository': items}, **({'errors': errors} if errors else {})}))
@@ -70,7 +97,8 @@ class World:
         gh.write_text('#!/bin/sh\nexec "%s" -I "%s" "$@"\n' % (sys.executable, self.dir / 'fake_gh.py'))
         gh.chmod(0o755)
         (self.dir / 'fake_gh.py').write_text(FAKE_GH)
-        self.world = {'repo': repo, 'items': items or {}, 'fail': fail, 'error': error, 'asked': []}
+        self.world = {'repo': repo, 'items': items or {}, 'fail': fail, 'error': error}
+        (self.dir / 'world.json').write_text(json.dumps(self.world))
         self.log = self.dir / 'calls.log'
         self.log.write_text('')
         fleet = self.dir / 'bin/fleet.sh'
@@ -83,9 +111,7 @@ class World:
         self.world.update(fleet_lines=list(lines), fleet_code=code)
 
     def run(self, *args, env=None):
-        first = {'refs': 2, 'tick': 3}.get(args[0] if args else None)
-        asked = [int(a) for a in args[first:] if a.isdigit()] if first else []
-        (self.dir / 'world.json').write_text(json.dumps(dict(self.world, asked=asked)))
+        (self.dir / 'world.json').write_text(json.dumps(self.world))
         r = subprocess.run([sys.executable, '-I', str(HERE / 'route.py'), *args], capture_output=True, text=True,
                            env=dict(self.env, **(env or {})), cwd=self.dir, timeout=60)
         return r.returncode, r.stdout, r.stderr
@@ -135,6 +161,29 @@ class Refs(unittest.TestCase):
             self.assertEqual(w.run(*args)[:2], (2, ''), args)
         self.assertEqual(w.run('refs', SAT, '1', env={'GH_REPO': ''})[:2], (2, ''))
         self.assertEqual(w.calls(), [])
+
+    def test_the_fake_checks_the_closing_reference_query_and_answers_its_aliases(self):
+        w = World(self, items={'29': pr(HOME + '#1183')})
+        owner, name = SAT.split('/')
+        ask = lambda q: subprocess.run([str(w.dir / 'bin/gh'), 'api', 'graphql', '-f', 'query=' + q,
+                                        '-f', 'o=' + owner, '-f', 'n=' + name],
+                                       capture_output=True, text=True, env=w.env, timeout=60)
+        sel = '{ __typename ... on PullRequest { closingIssuesReferences(first: 50) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } } } } }'
+        good = 'query($o: String!, $n: String!) { repository(owner: $o, name: $n) { p29: issueOrPullRequest(number: 29) %s p404: issueOrPullRequest(number: 404) %s } }' % (sel, sel)
+        r = ask(good)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(sorted(data['data']['repository']), ['p29', 'p404'])
+        self.assertEqual(data['data']['repository']['p29'], pr(HOME + '#1183'))
+        self.assertEqual(data['errors'], [{'type': 'NOT_FOUND', 'path': ['repository', 'p404']}])
+        for kind, bad in (
+                ('nonexistent field', good.replace('closingIssuesReferences', 'closingIssues')),
+                ('bad subfield', good.replace('nameWithOwner', 'unknownField')),
+                ('bad envelope', 'query { repository(owner: "a", name: "b") { p29: issueOrPullRequest(number: 29) %s } }' % sel)):
+            with self.subTest(kind=kind):
+                r = ask(bad)
+                self.assertEqual((r.returncode, r.stdout), (1, ''), kind)
+                self.assertIn('GraphQL:', r.stderr)
 
 
 class Loop(unittest.TestCase):

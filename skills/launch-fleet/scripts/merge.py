@@ -93,7 +93,7 @@ QUERY = '''query($owner: String!, $name: String!, $number: Int!) {
     timelineItems(itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT], last: 100) {
       nodes { ... on RemovedFromMergeQueueEvent { createdAt reason beforeCommit { oid } } } }
     enqueued: timelineItems(itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT], last: 1) {
-      nodes { ... on AddedToMergeQueueEvent { id createdAt enqueuer { login } } } }
+      nodes { ... on AddedToMergeQueueEvent { id createdAt enqueuer { login } actor { __typename login } } } }
     commits(last: 1) { nodes { commit { oid statusCheckRollup { contexts(first: 50) { pageInfo { hasNextPage }
       nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } } } }'''
 ENQUEUE = '''mutation($id: ID!, $head: GitObjectID!) {
@@ -452,7 +452,7 @@ def _cost(repo, number, home, ticket, extra):
             out, err, code = r.stdout.splitlines(), r.stderr.strip(), r.returncode
         except (OSError, subprocess.TimeoutExpired):
             out, err, code = [], '', None
-        reason = re.fullmatch(r'cost: ([A-Za-z0-9 #,.()-]+); nothing printed', err)
+        reason = re.fullmatch(r"cost: ([A-Za-z0-9 #,.()'-]+); nothing printed", err)
         if code == 0 and len(out) == 1 and out[0].startswith(f'Ticket #{ticket} cost (PR #{number}): '):
             body = 'launch-fleet: cost: ' + out[0]
         elif code == 0:
@@ -573,9 +573,29 @@ def _agents_line(repo, home, ref, number, ticket):
     return _cost_line(ref, ticket, builder_credits, reviewer_credits)
 
 
+def enqueued_login(added):
+    if not isinstance(added, dict):
+        return None
+    enqueuer = added.get('enqueuer')
+    if isinstance(enqueuer, dict) and isinstance(enqueuer.get('login'), str) and enqueuer['login']:
+        return enqueuer['login']
+    actor = added.get('actor')
+    if not isinstance(actor, dict):
+        return None
+    login = actor.get('login')
+    if not (isinstance(login, str) and login):
+        return None
+    kind = actor.get('__typename')
+    if kind == 'Bot':
+        return login if login.endswith('[bot]') else login + '[bot]'
+    if kind == 'User':
+        return None if login.endswith('[bot]') else login
+    return login if kind is None else None
+
+
 def enqueued_by_us(repo, p):
     nodes = ((p or {}).get('enqueued') or {}).get('nodes') or []
-    login = ((nodes[-1] if isinstance(nodes[-1], dict) else {}).get('enqueuer') or {}).get('login') if nodes else None
+    login = enqueued_login(nodes[-1]) if nodes else None
     return login is not None and post.ours({'user': {'login': login}}, post.authors(repo))
 
 

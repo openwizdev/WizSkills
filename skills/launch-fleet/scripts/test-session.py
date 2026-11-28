@@ -1090,6 +1090,8 @@ class Session(unittest.TestCase):
         self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
         self.assertEqual(self.merges(), [])
         self.assertEqual(self.probes(), 0)
+        self.assertFalse((self.home / 'shared-pause.json').exists(),
+                         'a supplier that leaves no observation must not latch a pause')
         out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
         self.assertIn('#12 merged', out)
         self.assertEqual(self.probes(), 0)
@@ -1336,6 +1338,62 @@ class Session(unittest.TestCase):
             {'repository': REPO, 'ticket': 5, 'skill': 'build-ticket', 'harness': 'claude', 'model': 'synthetic-builder'},
             {'repository': REPO, 'ticket': 12, 'skill': 'review-ticket', 'harness': 'codex',
              'model': 'synthetic-table-reviewer'}])
+
+
+class OverloadAlarm(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix='overload alarm ')
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
+        self.state = self.home / 'pause.json'
+        self.now = 1_700_000_000
+
+    def observation(self, remaining=1000, jobs=None):
+        pool = {'remaining': remaining, 'limit': 1000, 'reset_at': self.now + 3600, 'retry_after': 0}
+        return {'repository': 'example/repo', 'observed_at': self.now, 'complete': True,
+                'queue': {'complete': True, 'jobs': jobs or []},
+                'budgets': {'rest': pool, 'graphql': pool}}
+
+    def guard(self, action, observation=None):
+        env = dict(os.environ, GH_REPO='example/repo', LAUNCH_FLEET_OVERLOAD_STATE=str(self.state),
+                   LAUNCH_FLEET_NOW=str(self.now))
+        env.pop('LAUNCH_FLEET_OVERLOAD_SUPPLY', None)
+        env.pop('LAUNCH_FLEET_OVERLOAD_INPUT', None)
+        if observation is None:
+            path = '/nonexistent-overload-observation'
+        else:
+            path = self.home / 'observation.json'
+            path.write_text(json.dumps(observation))
+            path = str(path)
+        env['LAUNCH_FLEET_OVERLOAD_INPUT'] = path
+        result = subprocess.run(['sh', str(HERE / 'fleet.sh'), 'overload', action], env=env,
+                                capture_output=True, text=True)
+        try:
+            body = json.loads(result.stdout)
+        except ValueError:
+            body = None
+        return result, body
+
+    def test_a_missing_observation_refuses_without_latching_and_resume_clears_a_real_pause(self):
+        missing, body = self.guard('merge-batch')
+        self.assertEqual(missing.returncode, 1, missing.stderr)
+        self.assertEqual(body['causes'], ['observation_unknown'])
+        self.assertFalse(body['allowed'])
+        self.assertFalse(self.state.exists(), 'a missing observation must not write a durable pause')
+
+        alarm, paused = self.guard('merge-batch', self.observation(remaining=50))
+        self.assertEqual(alarm.returncode, 1, alarm.stdout)
+        self.assertEqual(paused['level'], 'alarm')
+        self.assertTrue(self.state.is_file())
+
+        cleared, resumed = self.guard('resume')
+        self.assertEqual(cleared.returncode, 0, cleared.stderr + cleared.stdout)
+        self.assertTrue(resumed['allowed'])
+        self.assertFalse(resumed['paused'])
+        self.assertFalse(self.state.exists())
+
+        healthy, admitted = self.guard('merge-batch', self.observation())
+        self.assertEqual((healthy.returncode, admitted['allowed'], admitted['level']), (0, True, 'healthy'))
 
 
 if __name__ == '__main__':

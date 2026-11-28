@@ -366,9 +366,12 @@ class Token(unittest.TestCase):
         env = self.service(p)
         started = p.host('start', REPO, 7, 'claude', 'claude-opus-5-5', **env)
         self.assertEqual(started, (0, 'started #7 on local', ''))
-        self.assertEqual([r['request'] for r in self.requests(p)], [{
+        reqs = [r['request'] for r in self.requests(p)]
+        self.assertEqual(len(reqs), 1)
+        self.assertTrue(reqs[0]['answer_key'].startswith('-----BEGIN PUBLIC KEY-----\n'))
+        self.assertEqual({k: v for k, v in reqs[0].items() if k != 'answer_key'}, {
             'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'builder-7',
-            'repositories': [REPO], 'permissions': WRITE}])
+            'repositories': [REPO], 'permissions': WRITE})
         held = [f for f in (p.dir / 'token-private').iterdir()]
         self.assertEqual(len(held), 1)
         self.assertEqual(held[0].stat().st_mode & 0o777, 0o600)
@@ -868,7 +871,9 @@ class Roster(unittest.TestCase):
         self.assertEqual(start_inputs(p)[0], ('helper-bot', {
             'repository': 'syn-maker/garden', 'ticket': 10, 'skill': 'launch-fleet', 'harness': 'codex',
             'model': 'gpt-6.2-sol', 'effort': 'medium'}))
-        self.assertEqual(Token().requests(p)[0]['request'], {
+        first_req = Token().requests(p)[0]['request']
+        self.assertTrue(first_req['answer_key'].startswith('-----BEGIN PUBLIC KEY-----\n'))
+        self.assertEqual({k: v for k, v in first_req.items() if k != 'answer_key'}, {
             'schema': 'openwiz.token-service.v1', 'kind': 'request', 'requester': 'orchestrator-10',
             'repositories': ['syn-maker/garden'], 'permissions': WRITE})
         woke = p.host('wake', repo, 10, **env)

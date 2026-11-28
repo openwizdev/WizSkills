@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import contextlib
 import fcntl
 import hashlib
@@ -28,6 +29,9 @@ WITHHELD = "openwiz: openwiz[bot] token withheld from git ({}); git stops rather
 REQUESTER = re.compile(r"[a-z][a-z0-9-]{0,63}")
 REPOSITORY = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
 TOKEN = re.compile(r"[A-Za-z0-9._~+/-]+=*")
+OPENSSL, OPENSSL_TIMEOUT_S = "/usr/bin/openssl", 30
+OAEP = ("-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256", "-pkeyopt", "rsa_mgf1_md:sha256")
+BLOCK_HOLDS, BLOCK, MOST_BLOCKS = 318, 384, 8
 REFUSAL_MESSAGE = re.compile(r"Token refused: [^\n]+\.")
 GIT_HELPER_KEY = "credential.https://github.com.helper"
 RUN_MARK, GIT_MARK = "OPENWIZ_AGENT_TOKEN_RUN", "OPENWIZ_AGENT_TOKEN_GIT_AT"
@@ -90,19 +94,63 @@ def ask(argv, request, env):
     return ("bad-answer" if isinstance(message, dict) else "unreachable"), None
 
 
-def check_answer(message, wanted, now):
+def openssl(args, data=b"", fds=()):
+    try:
+        done = subprocess.run([OPENSSL, *args], input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              env={}, pass_fds=fds, timeout=OPENSSL_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def one_time_key():
+    private = openssl(["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:3072"])
+    public = openssl(["pkey", "-pubout"], private) if private else None
+    return (private, public.decode("ascii")) if public else (None, None)
+
+
+def opened(sealed, private):
+    try:
+        data = base64.b64decode(sealed, validate=True)
+    except ValueError:
+        return None
+    if not data or len(data) % BLOCK or len(data) > MOST_BLOCKS * BLOCK:
+        return None
+    token = b""
+    for at in range(0, len(data), BLOCK):
+        reader, writer = os.pipe()
+        try:
+            with os.fdopen(writer, "wb") as pipe:
+                pipe.write(private)
+            part = openssl(["pkeyutl", "-decrypt", "-inkey", f"/dev/fd/{reader}", *OAEP],
+                           data[at:at + BLOCK], fds=(reader,))
+        finally:
+            os.close(reader)
+        if not part or (len(part) != BLOCK_HOLDS and at + BLOCK < len(data)):
+            return None
+        token += part
+    try:
+        return token.decode("ascii")
+    except ValueError:
+        return None
+
+
+def check_answer(message, wanted, private):
     if not (isinstance(message, dict) and set(message) == {
-            "schema", "kind", "token", "expires_at", "repositories", "permissions"}):
+            "schema", "kind", "sealed_token", "expires_at", "repositories", "permissions"}):
         return None
     expires_at = message["expires_at"]
     if (message["schema"] != SCHEMA or message["kind"] != "answer"
-            or not isinstance(message["token"], str) or not TOKEN.fullmatch(message["token"])
+            or not isinstance(message["sealed_token"], str)
             or type(expires_at) is not int
-            or not REFRESH_AT_S < expires_at - now <= MAX_LIFETIME_S
             or message["repositories"] != wanted["repositories"]
             or message["permissions"] != wanted["permissions"]):
         return None
-    return message["token"], expires_at
+    token = opened(message["sealed_token"], private)
+    if (not token or not TOKEN.fullmatch(token)
+            or not REFRESH_AT_S < expires_at - int(time.time()) <= MAX_LIFETIME_S):
+        return None
+    return token, expires_at
 
 
 def route(env):
@@ -119,12 +167,15 @@ def route(env):
 
 
 def mint(argv, wanted, env):
-    request = json.dumps({"schema": SCHEMA, "kind": "request", **wanted}).encode() + b"\n"
+    private, answer_key = one_time_key()
+    if not private:
+        return "unreachable", None, None
+    request = json.dumps({"schema": SCHEMA, "kind": "request", "answer_key": answer_key, **wanted}).encode() + b"\n"
     call_env = {k: v for k, v in env.items() if k not in ("GH_TOKEN", LEGACY_APP_KEY)}
     reason, message = ask(argv, request, call_env)
     if reason:
         return reason, None, None
-    got = check_answer(message, wanted, int(time.time()))
+    got = check_answer(message, wanted, private)
     return ("bad-answer", None, None) if got is None else (None, *got)
 
 
@@ -270,8 +321,8 @@ def token_for(private, wanted, env, snapshot=None):
             if (usable(held, int(time.time())) and held.get("repositories") == wanted["repositories"]
                     and held.get("permissions") == wanted["permissions"]):
                 if snapshot:
-                    private.write(snapshot, {"token": held["token"], "expires_at": held["expires_at"],
-                                             "request": name})
+                    write_new(private, snapshot, {"token": held["token"], "expires_at": held["expires_at"],
+                                                  "request": name})
                 return held["token"], held["expires_at"]
         reason, token, expires_at = mint(argv, wanted, env)
     stored = True
@@ -283,15 +334,27 @@ def token_for(private, wanted, env, snapshot=None):
             try:
                 private.write(name, {"token": token, "expires_at": expires_at, **wanted})
                 if snapshot:
-                    private.write(snapshot, {"token": token, "expires_at": expires_at, "request": name})
+                    write_new(private, snapshot, {"token": token, "expires_at": expires_at, "request": name})
             except OSError:
                 stored = False
         kept = list(kept_tokens(private, name))
     base = revoke_base(env)
     if not stored:
-        failed = revoke_held(None, base, token)
+        target = private if os.fstat(private.fd).st_nlink else recovery(env)
+        saved = findable(target, name, token, expires_at)
+        try:
+            failed = revoke_held(target if saved else None, base, token)
+        finally:
+            if target and target is not private:
+                os.close(target.fd)
+        if failed:
+            again = recovery(env)
+            saved = findable(again, name, token, expires_at)
+            if again:
+                os.close(again.fd)
+        left = "; the token is kept for a later revoke" if saved else ": suspend the installation"
         raise Refused("the private token directory went away, so the new token "
-                      + (f"was not revoked ({failed}): suspend the installation" if failed else "was revoked"))
+                      + (f"was not revoked ({failed}){left}" if failed else "was revoked"))
     for held in kept:
         revoke_held(private, base, held)
     if reason:
@@ -378,10 +441,17 @@ def run(args, env):
     no_legacy_app_key(env)
     close_channel(env)
     private = Private(env, create=True)
-    name = f"run-{secrets.token_hex(16)}.json"
-    token, expires_at = token_for(private, wanted, env, snapshot=name)
+    name = reserve(private, cache_name(wanted))
+    try:
+        token, expires_at = token_for(private, wanted, env, snapshot=name)
+    except (Refused, FileExistsError) as error:
+        private.unlink(slot_name(name))
+        if isinstance(error, Refused):
+            raise
+        raise Refused("another run's token copy has this run's name, so no openwiz[bot] token is handed over")
     child = without_inherited(env)
     if not token:
+        private.unlink(slot_name(name))
         return execute(command, child)
     snapshot = os.path.join(private.path, name)
     cache, held = cache_name(wanted), {"token": token, "expires_at": expires_at}
@@ -421,6 +491,7 @@ def run(args, env):
         elif held["token"] and held["expires_at"] > time.time() and not os.fstat(private.fd).st_nlink:
             rescue(env, cache, held)
         private.unlink(gh_binding(name))
+        private.unlink(slot_name(name))
         if farm:
             private.remove_folder(farm)
 
@@ -616,7 +687,7 @@ def snapshot_token(snapshot, env, check=only_git_transport):
         return "no private directory", None
     name = os.path.basename(snapshot)
     if (snapshot != env.get(RUN_MARK) or os.path.dirname(snapshot) != private.path
-            or not re.fullmatch(r"run-[0-9a-f]{32}\.json", name)):
+            or not SNAPSHOT.fullmatch(name)):
         return "not this run's helper", None
     reason = check(snapshot, env)
     if reason:
@@ -655,7 +726,7 @@ def bound_gh(real, refuse, env):
         private = Private(env, create=False)
     except Refused:
         return "no private directory", None
-    if os.path.dirname(snapshot) != private.path or not re.fullmatch(r"run-[0-9a-f]{32}\.json", name):
+    if os.path.dirname(snapshot) != private.path or not SNAPSHOT.fullmatch(name):
         return "not this run's gh", None
     bound = private.read(gh_binding(name))
     if not (isinstance(bound, dict) and bound.get("gh") == real and bound.get("refuse") == refuse):
@@ -783,7 +854,7 @@ def gh_checked(fd, path, refuse, args, env):
 API_BASE = "https://api.github.com"
 NOT_REVOKED = "openwiz: openwiz[bot] token not revoked ({}); the token is kept for a later revoke\n"
 NO_TOKEN = "openwiz: openwiz[bot] token not revoked (no token found)\n"
-SNAPSHOT = re.compile(r"run-[0-9a-f]{32}\.json")
+SNAPSHOT = re.compile(r"run-(?:[0-9a-f]{32}|[0-9a-f]{16}-[0-9a-f]{16})\.json")
 REVOKE_REASONS = ("GitHub refused", "GitHub unreachable", "not the GitHub API", "no token found")
 
 
@@ -829,9 +900,16 @@ def listed(private):
         return []
 
 
+def peek(private, name):
+    try:
+        return private.read(name)
+    except OSError:
+        return None
+
+
 def holders(private, token):
     return [name for name in listed(private) if re.fullmatch(r"(token|kept|run)-[0-9a-f-]+\.json", name)
-            and live_token(private.read(name)) == token]
+            and live_token(peek(private, name)) == token]
 
 
 def kept_name(cache):
@@ -858,18 +936,74 @@ def kept_tokens(private, cache):
     kept = re.compile(f"kept-{cache[len('token-'):-len('.json')]}-[0-9a-f]{{32}}\\.json")
     found = {}
     for name in filter(kept.fullmatch, listed(private)):
-        held = private.read(name)
+        held = peek(private, name)
         if live_token(held):
             found.setdefault(held["token"], held["expires_at"])
     return found
 
 
+def snapshot_prefix(cache):
+    return "run-" + cache[len("token-"):][:16] + "-"
+
+
+def slot_name(snapshot):
+    return "slot-" + snapshot[len("run-"):-len(".json")]
+
+
+def reserve(private, cache):
+    for _ in range(8):
+        name = f"{snapshot_prefix(cache)}{secrets.token_hex(8)}.json"
+        try:
+            os.close(os.open(slot_name(name), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600,
+                             dir_fd=private.fd))
+            return name
+        except FileExistsError:
+            continue
+        except OSError:
+            break
+    raise Refused("cannot reserve a name for this run's token copy, so no openwiz[bot] token is handed over")
+
+
+def write_new(private, name, value):
+    temporary = f".tmp-{secrets.token_hex(8)}"
+    private.write(temporary, value)
+    try:
+        os.link(temporary, name, src_dir_fd=private.fd, dst_dir_fd=private.fd)
+    finally:
+        private.unlink(temporary)
+
+
 def retire(private, cache):
-    drop(private, cache, cache, retire=True)
-    for name in listed(private):
-        held = private.read(name) if SNAPSHOT.fullmatch(name) else None
+    moved, failed = [], None
+
+    def set_aside(name):
+        nonlocal failed
+        kept = kept_name(cache)
+        try:
+            os.rename(name, kept, src_dir_fd=private.fd, dst_dir_fd=private.fd)
+            moved.append(kept)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            failed = failed or error
+
+    set_aside(cache)
+    snapshots = [name for name in listed(private) if SNAPSHOT.fullmatch(name)]
+    for name in snapshots:
+        if name.startswith(snapshot_prefix(cache)):
+            set_aside(name)
+    for name in snapshots:
+        held = None if name.startswith(snapshot_prefix(cache)) else peek(private, name)
         if isinstance(held, dict) and held.get("request") == cache:
-            drop(private, name, cache, retire=True)
+            set_aside(name)
+    for kept in moved:
+        held = peek(private, kept)
+        token = live_token(held)
+        others = [found for found in holders(private, token) if found != kept] if token else []
+        if (token_of(held) and not token) or any(found.startswith("kept-") for found in others):
+            private.unlink(kept)
+    if failed:
+        raise failed
 
 
 def keep(private, cache, token, expires_at):
@@ -877,6 +1011,17 @@ def keep(private, cache, token, expires_at):
         return False
     private.write(kept_name(cache), {"token": token, "expires_at": expires_at})
     return True
+
+
+def findable(private, cache, token, expires_at):
+    if not private:
+        return False
+    try:
+        with locked(private):
+            keep(private, cache, token, expires_at)
+            return token in kept_tokens(private, cache)
+    except OSError:
+        return False
 
 
 def revoke_held(private, base, token):
@@ -1057,12 +1202,28 @@ def revoke(args, env):
     if reason is None:
         try:
             private = Private(env, create=False)
-        except Refused:
-            private = None
+        except Refused as error:
+            if isinstance(error.__context__, FileNotFoundError):
+                sys.stderr.write(NO_TOKEN)
+            else:
+                sys.stderr.write(f"openwiz: openwiz[bot] token not revoked ({error})\n")
+            return 1
         try:
             reason = revoke_request(private, base, cache)
         finally:
-            if private:
+            os.close(private.fd)
+    else:
+        try:
+            private = Private(env, create=False)
+        except Refused:
+            private = None
+        if private:
+            try:
+                with locked(private):
+                    retire(private, cache)
+            except OSError:
+                pass
+            finally:
                 os.close(private.fd)
     if reason:
         sys.stderr.write(NO_TOKEN if reason == "no token found" else NOT_REVOKED.format(reason))

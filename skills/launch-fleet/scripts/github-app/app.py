@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
 import time
@@ -16,6 +17,7 @@ PERMISSIONS = dict.fromkeys(
     ("metadata", "contents", "issues", "pull_requests", "checks", "actions"), "read")
 SERVICE = dict(PERMISSIONS, contents="write", issues="write", pull_requests="write")
 MODE = "OPENWIZ_GITHUB_APP_MODE"
+OPENSSL = "/usr/bin/openssl"
 FACTORY = {"jparker2006": ("ClosedWiz",), "openwizdev": ("OpenWiz", "WizPlugins", "WizSkills")}
 
 
@@ -190,16 +192,18 @@ def absent(directory, name):
 
 
 def save_file(directory, name, content):
-    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    temporary = f".{name}.{secrets.token_hex(8)}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                  0o600, dir_fd=directory)
     try:
         with os.fdopen(fd, "wb") as file:
             file.write(content)
             file.flush()
             os.fsync(file.fileno())
-    except Exception:
-        os.unlink(name, dir_fd=directory)
-        raise
+        os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+    finally:
+        os.unlink(temporary, dir_fd=directory)
+    os.fsync(directory)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -245,10 +249,23 @@ def get(base, path, jwt):
 
 
 def openssl(args, data, **kwargs):
-    result = subprocess.run(["openssl", *args], input=data, capture_output=True,
-                            timeout=10, **kwargs)
+    require(os.path.isfile(OPENSSL))
+    result = subprocess.run([OPENSSL, *args], input=data, capture_output=True,
+                            timeout=10, env={}, **kwargs)
     require(result.returncode == 0)
     return result.stdout
+
+
+def revoke(base, token):
+    if not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9._~+/-]{1,16384}=*", token) is None:
+        return
+    request = urllib.request.Request(api_base(base) + "/installation/token", headers={
+        "Accept": "application/vnd.github+json", "User-Agent": "OpenWiz-App-setup",
+        "X-GitHub-Api-Version": "2022-11-28", "Authorization": "Bearer " + token}, method="DELETE")
+    try:
+        urllib.request.build_opener(NoRedirect()).open(request, timeout=15).close()
+    except Exception:
+        pass
 
 
 def encode(data):

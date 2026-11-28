@@ -112,11 +112,11 @@
       "steps": [
         {
           "line": "{",
-          "reply": {"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "Parse error"}}
+          "reply": {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}
         },
         {
           "line": "[]",
-          "reply": {"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "Invalid Request"}}
+          "reply": {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}}
         },
         {
           "send": {"jsonrpc": "2.0", "id": 12, "method": "resources/read", "params": {"uri": "wizskills://syn-alpha/reference/notes.txt"}},

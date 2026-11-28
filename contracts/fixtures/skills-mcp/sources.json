@@ -1,13 +1,16 @@
 {
+  "archiveFiles": {
+    "skills/syn-alpha/SKILL.md": "---\nname: syn-alpha\ndescription: Synthetic alpha skill.\n---\n# Alpha\n"
+  },
   "cases": [
     {"name": "local", "from": "syn-checkout", "source": "local", "fetches": 0},
-    {"name": "local-with-tree", "from": "syn-checkout", "tree": "2222222222222222222222222222222222222222",
+    {"name": "local-with-tree", "from": "syn-checkout", "tree": "71a1d14a51019eb46aade982b77bffb5ff4390d1",
      "refusal": "invalid-source", "fetches": 0},
     {"name": "pinned", "from": "github:syn-owner/syn-skills@1111111111111111111111111111111111111111",
-     "tree": "2222222222222222222222222222222222222222", "observedTree": "2222222222222222222222222222222222222222",
+     "tree": "71a1d14a51019eb46aade982b77bffb5ff4390d1", "observedTree": "71a1d14a51019eb46aade982b77bffb5ff4390d1",
      "source": "github", "fetches": 1},
     {"name": "cached", "from": "github:syn-owner/syn-skills@1111111111111111111111111111111111111111",
-     "tree": "2222222222222222222222222222222222222222", "observedTree": "2222222222222222222222222222222222222222",
+     "tree": "71a1d14a51019eb46aade982b77bffb5ff4390d1", "observedTree": "71a1d14a51019eb46aade982b77bffb5ff4390d1",
      "cached": true, "source": "github", "fetches": 0},
     {"name": "branch", "from": "github:syn-owner/syn-skills@main", "refusal": "unpinned-commit", "fetches": 0},
     {"name": "tag", "from": "github:syn-owner/syn-skills@syn-v1", "refusal": "unpinned-commit", "fetches": 0},
@@ -17,10 +20,10 @@
     {"name": "bad-tree", "from": "github:syn-owner/syn-skills@1111111111111111111111111111111111111111", "tree": "2222222",
      "refusal": "invalid-tree", "fetches": 0},
     {"name": "mismatch", "from": "github:syn-owner/syn-skills@1111111111111111111111111111111111111111",
-     "tree": "2222222222222222222222222222222222222222", "observedTree": "3333333333333333333333333333333333333333",
+     "tree": "3333333333333333333333333333333333333333", "observedTree": "71a1d14a51019eb46aade982b77bffb5ff4390d1",
      "refusal": "tree-mismatch", "fetches": 1, "discard": true},
     {"name": "cached-mismatch", "from": "github:syn-owner/syn-skills@1111111111111111111111111111111111111111",
-     "tree": "2222222222222222222222222222222222222222", "observedTree": "3333333333333333333333333333333333333333",
+     "tree": "3333333333333333333333333333333333333333", "observedTree": "71a1d14a51019eb46aade982b77bffb5ff4390d1",
      "cached": true, "refusal": "tree-mismatch", "fetches": 0}
   ]
 }

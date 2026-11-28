@@ -16,7 +16,7 @@
   },
   "cases": [
     {"file": "all-roles", "role": null, "schemaValid": true, "skills": ["syn-alpha", "syn-beta"]},
-    {"file": "all-roles", "role": "builder", "schemaValid": true, "skills": ["syn-alpha"], "hidden": "syn-beta"},
+    {"file": "all-roles", "role": "builder", "schemaValid": true, "skills": ["syn-alpha"], "hidden": {"skill": "syn-beta", "promptCode": -32602, "resourceCode": -32002}},
     {"file": "all-roles", "role": "helper", "schemaValid": true, "skills": []},
     {"file": "builder-only", "role": "reviewer", "schemaValid": true, "refusal": "unknown-role"},
     {"file": "builder-only", "role": "operator", "schemaValid": true, "refusal": "unknown-role"},

@@ -303,5 +303,115 @@ class CrossRepositoryRelies(unittest.TestCase):
         self.assertEqual((out.returncode, calls), (0, []), out.stderr)
 
 
+FLAT = HERE.parent / 'test/flat'
+FLAT_SINCE = '2026-11-28T00:00:00Z'
+
+
+class FlatGraphs(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def approve(self, graph, created=FLAT_SINCE, extra=''):
+        spec_body = SPEC_BODY + extra
+        lines = [f'plan-graph revision v2\nspec #{graph["source"]["spec"]} body sha256 {sha(spec_body)}\n']
+        for t in graph['tickets']:
+            blockers = ' '.join(f'#{n}' for n in sorted(b['number'] for b in t['blocked_by'])) or 'none'
+            lines.append(f'ticket #{t["number"]} blocked-by {blockers} body sha256 {sha(t["body"])} title {t["title"]}\n')
+        (self.tmp / 'graph.json').write_text(json.dumps(graph))
+        (self.tmp / 'revision.txt').write_text(''.join(lines))
+        (self.tmp / 'spec.json').write_text(json.dumps({'body': spec_body, 'createdAt': created}))
+        return subprocess.run(
+            ['python3', '-I', str(APPROVE), '--graph', str(self.tmp / 'graph.json'),
+             '--revision', str(self.tmp / 'revision.txt'), '--spec', str(self.tmp / 'spec.json'),
+             '--grill', GRILL, '--number', '1', '--date', '2026-11-28', '--root', str(self.tmp)],
+            capture_output=True, text=True)
+
+    def settings(self, name):
+        return json.loads((FLAT / f'settings-{name}.json').read_text())
+
+    def chain(self, count, links, titles=None):
+        tickets = [ticket(9320 + i, 'Size: S.', f'app/part{i}.py') for i in range(count)]
+        for i, t in enumerate(tickets):
+            t['title'] = (titles or {}).get(i, t['title'])
+            if i in links:
+                t['blocked_by'] = [{'number': 9320 + i - 1, 'state': 'OPEN'}]
+                t['body'] = t['body'].replace('## Links\n\nnone\n', f'## Links\n\n- #{9320 + i - 1} real: {links[i]}\n')
+        return {'schema': 'openwiz.plan-links.v1', 'kind': 'graph', 'repo': 'synthetic-owner/synthetic-repo',
+                'read_at': '2026-11-28T12:00:00Z', 'source': {'kind': 'spec', 'spec': SPEC}, 'tickets': tickets}
+
+    def test_the_settings_plan_is_refused_before_its_re_cut_and_passes_after(self):
+        out = self.approve(self.settings('before'))
+        self.assertEqual((out.returncode, out.stdout), (1, ''), out.stderr)
+        width = [line for line in out.stderr.splitlines() if line.startswith('approve: width: ')]
+        self.assertEqual(len(width), 1, out.stderr)
+        self.assertIn('the critical chain is 7 for 13 open tickets', width[0])
+        self.assertIn('Why deep:', width[0])
+        links = [line for line in out.stderr.splitlines() if line.startswith('approve: links: ')]
+        self.assertEqual([line.split(':')[2].strip() for line in links], ['#3379', '#3380', '#3381'], out.stderr)
+        self.assertIn('the real line for #3377 names only an interface', links[0])
+        out = self.approve(self.settings('after'))
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        self.assertIn('Checks: 15 tickets; links 29;', out.stdout)
+        self.assertIn('width: chain 5, widest 4;', out.stdout)
+
+    def test_a_spec_before_flat_since_checks_exactly_as_before(self):
+        out = self.approve(self.settings('before'), created='2026-11-27T23:59:59Z')
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        self.assertIn('width: chain 7, widest 4;', out.stdout)
+
+    def test_why_deep_must_name_one_of_the_graphs_tickets(self):
+        graph = self.settings('before')
+        for line in ('Why deep: the commands come one after another.', 'Why deep: #9999 is slow.',
+                     'Why deep:', '<!-- Why deep: #3377 then #3976 -->'):
+            with self.subTest(line=line):
+                out = self.approve(graph, extra=f'\n{line}\n')
+                self.assertIn('approve: width: the critical chain is 7', out.stderr)
+        out = self.approve(graph, extra='\nWhy deep: #3977 undoes through the writer #3976 adds to the reader #3377.\n')
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertNotIn('approve: width:', out.stderr)
+        self.assertIn('approve: links: #3379:', out.stderr)
+
+    def test_a_chain_is_held_to_five_and_to_two_thirds_of_the_open_tickets_over_three(self):
+        work = 'the reader that resolves each row, which the next part calls'
+        for count, depth, refused in ((6, 6, True), (12, 6, True), (9, 5, False), (5, 4, True), (6, 4, False),
+                                      (3, 3, False)):
+            with self.subTest(count=count, depth=depth):
+                out = self.approve(self.chain(count, {i: work for i in range(1, depth)}))
+                self.assertEqual(out.returncode, 1 if refused else 0, out.stderr)
+                self.assertEqual('approve: width: the critical chain' in out.stderr, refused, out.stderr)
+                if not refused:
+                    self.assertIn(f'width: chain {depth}, ', out.stdout)
+
+    def test_a_real_line_that_names_only_an_interface_is_refused(self):
+        refused = ('`tool show --json`, which the next part calls', 'the `tool set` command and its flags',
+                   '`tool show` and `set` answers and exit codes, that the skill reads')
+        passed = ('`tool show`, the reader that resolves each row, which the next part calls',
+                  '`tool set`, which this ticket extends with a `--dry-run` flag',
+                  'the `--runner` option on `tool plan`, which this ticket builds on')
+        for reason in refused + passed:
+            with self.subTest(reason=reason):
+                out = self.approve(self.chain(3, {1: reason}))
+                self.assertEqual(out.returncode, 1 if reason in refused else 0, out.stderr)
+                if reason in refused:
+                    self.assertEqual(out.stderr, 'approve: links: #9321: the real line for #9320 names only an '
+                                     'interface, not the behaviour #9321 needs; name that behaviour, or say the '
+                                     "ticket extends #9320's code, or block on a contract-first ticket instead\n")
+        reason = refused[0]
+        for name, graph in (('a contract-first blocker', self.chain(3, {1: reason}, {0: 'The tool command, first'})),
+                            ('a live check', self.chain(3, {1: reason}, {1: 'Live check: the tool on a box'}))):
+            with self.subTest(case=name):
+                out = self.approve(graph)
+                self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        graph = self.chain(3, {1: reason})
+        graph['tickets'][0]['state'] = 'CLOSED'
+        graph['tickets'][1]['blocked_by'][0]['state'] = 'CLOSED'
+        out = self.approve(graph)
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+        out = self.approve(self.chain(3, {1: reason}), created='2026-11-27T23:59:59Z')
+        self.assertEqual((out.returncode, out.stderr), (0, ''), out.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

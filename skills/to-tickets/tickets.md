@@ -38,6 +38,46 @@ its exact path with `--planned` only after verifying the blocking ticket owns it
 The dependent's start still requires the file. `sh "<this skill's folder>/check-links.sh" <spec>`
 must separately pass. Keep the link report and explain each file link.
 
+## Flat graphs
+
+For a spec created on or after approve.py's `FLAT_SINCE`, step 4 holds the
+plan to three rules. Older specs check as before.
+
+**Contract first.** When a ticket relies on another only for an interface (a
+type, a schema, a command form or flag, a file format, a stub), cut a small
+contract ticket, `Size: S.`, holding the interface and a test of it, titled
+`<the interface>, first`. It lands first and blocks both sides; the dependent
+builds against it, never against the built implementation. The live check, not
+the dependent, keeps the arrow to the real implementation. Wanting one ticket
+to merge before another is never a reason for an arrow.
+
+**Why does this rely?** Each `real` line answers that question: the behaviour
+the dependent needs from its blocker, not just which file or command. Write
+the behaviour first, then how the dependent uses it:
+`- #12 real: the reader that resolves each role's account, which the launcher calls`.
+If only the interface would do, block on the contract ticket instead. Step 4
+refuses a `real` line to an open blocker that is not a contract-first ticket
+when, with backticked spans dropped, the words before its first `which`,
+`that`, `whose` or `who` name only interface nouns (command, flag, option, form,
+format, type, schema, file, field, path, name, header, exit code, answer,
+output and the like): `` - #12 real: `tool show --json`, which the launcher
+calls `` is refused. A line that says the ticket `extends`, `modifies`,
+`changes` or `builds on` its blocker's code passes, as does every line of a
+person's ticket or a ticket whose title names a live check. This is a reason
+text rule only: the line keeps the plan links contract's form.
+
+**Depth.** Step 4 refuses a critical chain (as `width: chain` counts it) over
+`MAX_CHAIN`, 5, and a chain over `RATIO_FLOOR`, 3, that is more than
+`MAX_RATIO`, 2/3, of the spec's open tickets, unless the spec body has a line
+`Why deep: <the real needs>` naming at least one of the graph's tickets, for
+example `Why deep: #12 needs #11's migrated table, which needs #10's export`.
+The numbers come from OpenWiz's 0.2.0 plans: before their re-cut, specs of 5 to 35
+tickets ran chains of mostly 3 to 7; re-cut ones came out at 5 or less. In
+settings spec openwizdev/OpenWiz#3375, the command's readers waited on the built `openwiz
+settings` command and the chain was 7 for 13 tickets; one contract-first ticket
+both sides wait on cut it to 5 for 15 (`test/flat/`). Chains of 3 or less (a
+contract, its implementation, the live check) always pass the ratio.
+
 ## Picture data
 
 Build the diagram input from the same proposal or verified issue graph shown

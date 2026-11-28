@@ -1,4 +1,4 @@
-{"id": "alpha-001-dup", "verdict": "CONFIRMED", "reason": "Re-ran grep and confirmed zero references.", "evidence": ["git grep legacy_export -> 0 matches outside src/legacy_export.py"]}
-{"id": "loops-001", "verdict": "CONFIRMED", "reason": "Confirmed target_branch is legacy-main.", "evidence": ["scheduler list --json -> target_branch=legacy-main"]}
-{"id": "cross-001", "verdict": "PLAUSIBLE", "reason": "Helpers look similar, minor Unicode difference.", "evidence": ["diff -u alpha/src/slug.py beta/tools/slug.py -> 2 lines differ"]}
-{"id": "alpha-002", "verdict": "REJECTED", "reason": "Flag --fast is parsed dynamically in src/options.py.", "evidence": ["git grep fast src/options.py -> src/options.py:44"]}
+{"id": "alpha-001-dup", "verdict": "CONFIRMED", "reason": "Re-ran grep and confirmed zero references.", "evidence": ["git grep legacy_export -> 0 matches outside src/legacy_export.py"], "blind": false, "changes_confirmed": null}
+{"id": "loops-001", "verdict": "CONFIRMED", "reason": "Confirmed target_branch is legacy-main.", "evidence": ["scheduler list --json -> target_branch=legacy-main"], "blind": false, "changes_confirmed": null}
+{"id": "cross-001", "verdict": "PLAUSIBLE", "reason": "Helpers look similar, minor Unicode difference.", "evidence": ["diff -u alpha/src/slug.py beta/tools/slug.py -> 2 lines differ"], "blind": true, "changes_confirmed": true}
+{"id": "alpha-002", "verdict": "REJECTED", "reason": "Flag --fast is parsed dynamically in src/options.py.", "evidence": ["git grep fast src/options.py -> src/options.py:44"], "blind": false, "changes_confirmed": null}

@@ -320,6 +320,60 @@ class FeedbackPath(unittest.TestCase):
                 self.assertEqual(rc, 1, text)
                 self.assertIn(why, text.strip().splitlines()[-1])
 
+    def test_verify_admits_the_earlier_six_field_brief(self):
+        earlier = {
+            "number": 9200, "author": "synthetic-owner", "body": BRIEF_BODY,
+            "labels": ["ready-for-agent"], "milestone": "9.4.2",
+            "comments": [{"author": "synthetic-owner", "body": APPROVAL}],
+        }
+        payload = {"report": 9101, "version": "9.4.2",
+                   "record_authors": ["openwiz[bot]", "Synthetic-Owner"], "brief": earlier}
+        rc, out, text = plan(payload, "verify")
+        self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
+        without_label = json.loads(json.dumps(payload))
+        without_label["brief"]["labels"] = []
+        rc, _, text = plan(without_label, "verify")
+        self.assertEqual(rc, 1, text)
+        self.assertIn("ready-for-agent", text.strip().splitlines()[-1])
+        shape = "with or without last_edited_at and ready_labelled"
+        one_new_field = json.loads(json.dumps(payload))
+        one_new_field["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        rc, _, text = plan(one_new_field, "verify")
+        self.assertEqual(rc, 2, text)
+        self.assertIn(shape, text)
+        only_ready = json.loads(json.dumps(payload))
+        only_ready["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"}]
+        rc, _, text = plan(only_ready, "verify")
+        self.assertEqual(rc, 2, text)
+        self.assertIn(shape, text)
+        bad_ready = json.loads(json.dumps(payload))
+        bad_ready["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        bad_ready["brief"]["ready_labelled"] = "nope"
+        rc, _, text = plan(bad_ready, "verify")
+        self.assertEqual(rc, 2, text)
+        self.assertIn("wrong types", text)
+        fresh = json.loads(json.dumps(payload))
+        fresh["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        fresh["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:01Z", "by": "synthetic-owner"}]
+        rc, out, text = plan(fresh, "verify")
+        self.assertEqual((rc, out), (0, {"verified": 9200, "report": 9101}), text)
+        stale = json.loads(json.dumps(payload))
+        stale["brief"]["last_edited_at"] = "2026-11-01T09:00:00Z"
+        stale["brief"]["ready_labelled"] = [{"at": "2026-11-01T09:00:00Z", "by": "synthetic-owner"}]
+        rc, _, text = plan(stale, "verify")
+        self.assertEqual(rc, 1, text)
+        self.assertIn("after the brief's last edit", text.strip().splitlines()[-1])
+
+    def test_verify_brief_eval_matches_the_shipped_contract(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "eval_verify_brief", ROOT / "skills/triage/test/eval_verify_brief.py")
+        ev = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ev)
+        result = ev.score(FEEDBACK)
+        self.assertEqual(result["passed"], result["total"], result["cases"])
+        self.assertTrue(all(row["ok"] for row in result["cases"]))
+
     def test_only_an_untriaged_report_is_triaged(self):
         for rep, why in [
             (report(body="I saw this:\n\n" + MARKER + "\n\nIs it a bug?"), "not a report"),

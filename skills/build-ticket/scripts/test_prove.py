@@ -47,6 +47,8 @@ class Repo(unittest.TestCase):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.git('config', 'core.checkStat', 'minimal')
+        for key, value in getattr(self, 'repo_config', ()):
+            self.git('config', key, value)
         for nth, side in enumerate(('base', 'head')):
             for old in self.repo.iterdir():
                 if old.name != '.git':
@@ -112,6 +114,20 @@ class Repo(unittest.TestCase):
         self.assertEqual(result['base_runs'], ['failed', 'failed'])
         self.assertEqual(result['head_runs'], ['error', 'error'])
         self.assertIn('head run 1: error (timeout)', done.stderr)
+
+    def test_same_size_edit_is_committed_when_git_ignores_inode_and_ctime(self):
+        self.repo_config = (('core.checkStat', 'minimal'), ('core.trustctime', 'false'))
+        paths = [FIXTURES / 'red-green' / side / 'calc.py' for side in ('base', 'head')]
+        saved = [(path, path.stat().st_atime, path.stat().st_mtime) for path in paths]
+        try:
+            for path, _, _ in saved:
+                os.utime(path, (1_700_000_000, 1_700_000_000))
+            base, head = self.build('red-green')
+        finally:
+            for path, atime, mtime in saved:
+                os.utime(path, (atime, mtime))
+        self.assertEqual(self.git('show', f'{base}:calc.py').splitlines()[-1].strip(), 'return a - b')
+        self.assertEqual(self.git('show', f'{head}:calc.py').splitlines()[-1].strip(), 'return a + b')
 
     def test_same_stat_edit_is_still_committed(self):
         self.repo.mkdir()

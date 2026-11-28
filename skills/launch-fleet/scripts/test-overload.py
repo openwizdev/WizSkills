@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import base64
+import contextlib
 import fcntl
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -97,7 +99,7 @@ def make_fake_gh(bin_dir, state_file):
         'elif "/rules/branches/" in target:\n'
         '    status = cfg.get("rules_status", 200)\n'
         '    if "rules_pages" in cfg:\n'
-        '        page = int(target.split("page=")[1].split("&")[0]) if "page=" in target else 1\n'
+        '        page = int(target.split("&page=")[1].split("&")[0]) if "&page=" in target else 1\n'
         '        pages = cfg["rules_pages"]\n'
         '        extra = {"Link": f"<https://api.github.com/{target}&page={page + 1}>; rel=\\"next\\""} if page < len(pages) else None\n'
         '        emit(pages[page - 1], status=status, extra=extra)\n'
@@ -388,7 +390,8 @@ class OverloadTest(unittest.TestCase):
             self.gh_state.write_text(json.dumps({'sleep': {'rate_limit': 6}, 'spawn_child': True}))
             out = self.root / 'obs-first.json'
             t0 = time.monotonic()
-            with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(mod, 'WINDOW', 1.0):
+            with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(mod, 'WINDOW', 1.0), \
+                    contextlib.redirect_stderr(io.StringIO()):
                 code = mod.main(['--repository', REPO, '--output', str(out)])
             elapsed = time.monotonic() - t0
             self.assertEqual(code, 1)
@@ -407,6 +410,10 @@ class OverloadTest(unittest.TestCase):
             obs = json.loads(out.read_text())
             self.assertFalse(obs['complete'])
             self.assertFalse(obs['queue']['complete'])
+            self.state.unlink(missing_ok=True)
+            guard = self.run_fleet('merge-batch', LAUNCH_FLEET_OVERLOAD_INPUT=str(out))
+            self.assertEqual(guard.returncode, 1, guard.stdout + guard.stderr)
+            self.assertIn('observation_unknown', json.loads(guard.stdout)['causes'])
 
     def test_missing_input_refuses_without_latching_durable_pause(self):
         missing = str(self.root / 'does-not-exist.json')

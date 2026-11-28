@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import binascii
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
+from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 
 DESCRIPTION = 'Default overload observation supplier for fleet.sh overload.'
 PAGE = 100
 API_LIMIT = 1000
+RULE_PAGES = 10
 TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ')
-REQUIRED_EVENTS = ('pull_request', 'merge_group')
 PROGRESSION = ('requested', 'waiting', 'pending', 'queued', 'in_progress')
 WAITING = ('queued', 'waiting', 'pending', 'requested')
 POOLS = {'core': 'rest', 'graphql': 'graphql'}
@@ -24,12 +29,18 @@ SECONDARY_WAIT = 60
 WINDOW = 60
 STATUS_LINE = re.compile(r'HTTP/[0-9.]+ ([0-9]{3})(?: .*)?')
 HEADER = re.compile(r'([A-Za-z0-9-]+): ?(.*)')
+NEXT_LINK = re.compile(r'<[^>]+>\s*;\s*rel="next"')
+CHECK_ROW = re.compile(r'\| *`([^`]+)` *\|')
 SECONDS = re.compile(r'[0-9]{1,6}')
 EPOCH = re.compile(r'[0-9]{1,12}')
 SECONDARY = re.compile(r'secondary rate limit', re.I)
 
 
 class Fail(Exception):
+    pass
+
+
+class NotFound(Fail):
     pass
 
 
@@ -128,36 +139,67 @@ def response(out):
 
 
 class Reader:
-    def __init__(self, clock):
+    def __init__(self, clock, window=None):
         self.clock, self.unknown = clock, False
+        self.window = WINDOW if window is None else window
         self.start = clock()
+        self.mono_start = time.monotonic()
+        self.deadline = self.mono_start + self.window
 
     def __call__(self, path):
-        return self.run(['gh', 'api', '--include', path], f'gh api {path}', 'rest')
+        return self.get(path)[0]
+
+    def get(self, path):
+        return self.run_with_headers(['gh', 'api', '--include', path], f'gh api {path}', 'rest')
 
     def graphql(self, query):
-        data = self.run(['gh', 'api', '--include', 'graphql', '-f', 'query=' + query], 'gh api graphql', 'graphql')
+        data, _ = self.run_with_headers(['gh', 'api', '--include', 'graphql', '-f', 'query=' + query],
+                                        'gh api graphql', 'graphql')
         if type(data) is not dict or 'errors' in data:
             raise Fail('gh api graphql: errors')
-        limit = as_obj(need(as_obj(need(data, 'data', 'graphql'), 'graphql data'), 'rateLimit', 'graphql'), 'rateLimit')
+        limit = as_obj(need(as_obj(need(data, 'data', 'graphql'), 'graphql data'), 'rateLimit', 'graphql'),
+                       'rateLimit')
         if as_int(limit, 'remaining', 'rateLimit') < 0:
             raise Fail('rateLimit: negative remaining')
         return data
 
-    def run(self, args, where, pool):
-        if self.clock() - self.start > WINDOW:
+    def remaining(self, where):
+        clock_left = self.window - (self.clock() - self.start)
+        mono_left = self.deadline - time.monotonic()
+        left = min(clock_left, mono_left)
+        if left <= 0:
+            raise Stale(where)
+        return left
+
+    def run_with_headers(self, args, where, pool):
+        left = self.remaining(where)
+        try:
+            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            raise Fail(f'{where}: gh could not start or wrote no text')
+        try:
+            stdout, _ = proc.communicate(timeout=left)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                proc.kill()
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
+            proc.wait()
             raise Stale(where)
         try:
-            r = subprocess.run(args, capture_output=True, stdin=subprocess.DEVNULL)
-            out = r.stdout.decode('utf-8')
-        except (OSError, UnicodeError):
+            out = stdout.decode('utf-8')
+        except UnicodeError:
             raise Fail(f'{where}: gh could not start or wrote no text')
         got = response(out)
         if got is None:
-            if r.returncode != 0:
-                raise Fail(f'{where} failed (exit {r.returncode})')
+            if proc.returncode != 0:
+                raise Fail(f'{where} failed (exit {proc.returncode})')
             self.unknown = True
-            return strict_json(out, where)
+            return strict_json(out, where), None
         status, headers, body = got
         pool = POOLS.get(headers.get('x-ratelimit-resource'), pool)
         self.signal(pool, status, headers, body)
@@ -168,9 +210,11 @@ class Reader:
         if pool == 'graphql' and type(data) is dict and type(data.get('errors')) is list and any(
                 type(e) is dict and e.get('type') == 'RATE_LIMITED' for e in data['errors']):
             raise Backoff(pool, self.wait(headers), headers)
-        if r.returncode != 0 or not 200 <= status < 300:
+        if status == 404:
+            raise NotFound(f'{where} failed (HTTP 404)')
+        if proc.returncode != 0 or not 200 <= status < 300:
             raise Fail(f'{where} failed (HTTP {status})')
-        return strict_json(body, where)
+        return strict_json(body, where), headers
 
     def signal(self, pool, status, headers, body):
         retry = headers.get('retry-after')
@@ -184,6 +228,117 @@ class Reader:
         if headers.get('x-ratelimit-remaining') == '0' and EPOCH.fullmatch(reset):
             return int(reset)
         return self.clock() + SECONDARY_WAIT
+
+
+def parse_fleet_checks(text):
+    checks, on = set(), False
+    for row in text.splitlines():
+        if row.startswith('## '):
+            on = row == '## CI checks'
+        elif on:
+            cell = CHECK_ROW.match(row)
+            if cell and cell.group(1).strip():
+                checks.add(cell.group(1))
+    return checks
+
+
+def branch_rules(repo, branch, read):
+    checks = set()
+    encoded = quote(branch, safe='')
+    for page in range(1, RULE_PAGES + 1):
+        path = f'repos/{repo}/rules/branches/{encoded}?per_page={PAGE}&page={page}'
+        where = f'gh api {path}'
+        data, headers = read.get(path)
+        if headers is None:
+            raise Fail(f'{where}: missing response headers')
+        for rule in as_list(data, where):
+            rule = as_obj(rule, where)
+            if rule.get('type') != 'required_status_checks':
+                continue
+            params = as_obj(need(rule, 'parameters', where), where + ' parameters')
+            for entry in as_list(need(params, 'required_status_checks', where), where + ' required_status_checks'):
+                ctx = as_str(as_obj(entry, where), 'context', where)
+                if not ctx:
+                    raise Fail(f'{where}: empty check context')
+                checks.add(ctx)
+        if not NEXT_LINK.search(headers.get('link', '')):
+            return checks
+    raise Fail(f'repos/{repo}/rules/branches/{encoded}: too many pages')
+
+
+def fleet_checks(repo, read):
+    path = f'repos/{repo}/contents/docs/agents/fleet.md'
+    where = f'gh api {path}'
+    try:
+        data = as_obj(read(path), where)
+    except NotFound:
+        return None
+    if data.get('type') != 'file' or data.get('encoding') != 'base64':
+        raise Fail(f'{where}: unexpected content shape')
+    raw_b64 = as_str(data, 'content', where)
+    try:
+        text = base64.b64decode(''.join(raw_b64.split()), validate=True).decode('utf-8')
+    except (binascii.Error, UnicodeError, ValueError):
+        raise Fail(f'{where}: invalid base64 content')
+    return parse_fleet_checks(text)
+
+
+def classic_checks(repo, branch, read):
+    encoded = quote(branch, safe='')
+    path = f'repos/{repo}/branches/{encoded}/protection/required_status_checks'
+    where = f'gh api {path}'
+    try:
+        data = as_obj(read(path), where)
+    except NotFound:
+        return set()
+    found = set()
+    if 'checks' in data:
+        for entry in as_list(data['checks'], where + ' checks'):
+            ctx = as_str(as_obj(entry, where), 'context', where)
+            if not ctx:
+                raise Fail(f'{where}: empty check context')
+            found.add(ctx)
+    if 'contexts' in data:
+        for ctx in as_list(data['contexts'], where + ' contexts'):
+            if type(ctx) is not str or not ctx:
+                raise Fail(f'{where}: invalid context')
+            found.add(ctx)
+    if 'checks' not in data and 'contexts' not in data:
+        raise Fail(f'{where}: missing checks')
+    return found
+
+
+def required_checks(repo, read):
+    checks = set()
+    branch = None
+    rules_ok = False
+    try:
+        info = as_obj(read(f'repos/{repo}'), f'gh api repos/{repo}')
+        branch = as_str(info, 'default_branch', f'gh api repos/{repo}')
+        if not branch:
+            raise Fail(f'gh api repos/{repo}: empty default_branch')
+        checks.update(branch_rules(repo, branch, read))
+        rules_ok = True
+    except Fail:
+        rules_ok = False
+
+    fleet_ok = False
+    try:
+        from_fleet = fleet_checks(repo, read)
+        if from_fleet is not None:
+            checks.update(from_fleet)
+        fleet_ok = True
+    except Fail:
+        fleet_ok = False
+
+    classic_ok = True
+    if rules_ok and not checks:
+        try:
+            checks.update(classic_checks(repo, branch, read))
+        except Fail:
+            classic_ok = False
+
+    return checks, rules_ok and fleet_ok and classic_ok and bool(checks)
 
 
 def pages(path, key, read):
@@ -213,10 +368,10 @@ def active_runs(base, read):
         listed = set()
         for value, where in pages(f'{base}/runs?status={status}&per_page={PAGE}', 'workflow_runs', read):
             rid = as_int(as_obj(value, where), 'id', where)
-            run = (as_int(value, 'run_attempt', where), as_str(value, 'event', where))
+            attempt = as_int(value, 'run_attempt', where)
             unique = unique and rid not in listed
             listed.add(rid)
-            if runs.setdefault(rid, run) != run:
+            if runs.setdefault(rid, attempt) != attempt:
                 raise Fail('a run listed twice, as two different runs')
     return runs, unique
 
@@ -232,10 +387,28 @@ def budgets_now(read):
     return {'rest': budget(limits, 'core'), 'graphql': budget(limits, 'graphql')}
 
 
+def apply_backoff(budgets, stop):
+    prev_retry = budgets[stop.pool]['retry_after']
+    if stop.budget is not None:
+        budgets[stop.pool] = dict(stop.budget)
+    budgets[stop.pool]['retry_after'] = max(prev_retry, stop.deadline or 0)
+
+
+def refresh_budgets(read, previous):
+    fresh = budgets_now(read)
+    for pool, prev in previous.items():
+        if prev['retry_after'] > 0:
+            if prev['reset_at'] > fresh[pool]['reset_at']:
+                fresh[pool] = dict(prev)
+            else:
+                fresh[pool]['retry_after'] = max(fresh[pool]['retry_after'], prev['retry_after'])
+    return fresh
+
+
 def observe(repo, clock):
     read = Reader(clock)
     base = f'repos/{repo}/actions'
-    complete, jobs = True, []
+    complete, queue_complete, jobs = True, False, []
     try:
         budgets = budgets_now(read)
     except (Backoff, Stale):
@@ -245,51 +418,67 @@ def observe(repo, clock):
             read.graphql(RATE_QUERY)
         except Fail:
             complete = False
+        except Backoff as stop:
+            complete = False
+            apply_backoff(budgets, stop)
+        checks, classified = required_checks(repo, read)
+        q_ok = classified
         runs, unique = active_runs(base, read)
-        complete = complete and unique
-        for rid, (attempt, event) in sorted(runs.items()):
+        q_ok = q_ok and unique
+        for rid, attempt in sorted(runs.items()):
             job_path = f'{base}/runs/{rid}/jobs?per_page={PAGE}'
             try:
                 page = pages(job_path, 'jobs', read)
             except Fail:
-                complete = False
+                q_ok = False
                 continue
             seen = set()
             for value, where in page:
                 jid, status = as_int(as_obj(value, where), 'id', where), as_str(value, 'status', where)
                 if jid in seen:
-                    complete = False
+                    q_ok = False
                     continue
                 seen.add(jid)
+                name = value.get('name')
+                if type(name) is not str or not name:
+                    q_ok = False
+                    name = None
                 current = value.get('run_attempt') == attempt and value.get('run_id') == rid
                 created = as_seconds(value, 'created_at', where)
                 begun = as_seconds(value, 'started_at', where, null=True)
                 if status in WAITING:
                     status, begun = 'queued', None
                 elif status not in ('in_progress', 'completed'):
-                    complete, status, begun = False, 'queued', None
+                    q_ok, status, begun = False, 'queued', None
                 if (not current or (status == 'in_progress' and begun is None)
                         or (begun is not None and begun < created)):
-                    complete = False
-                jobs.append({'id': f'job-{jid}', 'required': event in REQUIRED_EVENTS and current,
+                    q_ok = False
+                jobs.append({'id': f'job-{jid}',
+                             'required': bool(current and name is not None and name in checks),
                              'status': status, 'queued_at': created, 'started_at': begun})
-        budgets = budgets_now(read)
+        queue_complete = q_ok
+        if not queue_complete:
+            complete = False
+        try:
+            budgets = refresh_budgets(read, budgets)
+        except Fail:
+            complete = False
     except Stale:
         complete = False
+        queue_complete = False
     except Backoff as stop:
         complete = False
-        if stop.budget is not None:
-            budgets[stop.pool] = stop.budget
-        if stop.deadline is not None:
-            budgets[stop.pool]['retry_after'] = stop.deadline
+        apply_backoff(budgets, stop)
     complete = complete and not read.unknown
     stamp = clock()
-    if stamp - read.start > WINDOW:
+    if stamp - read.start > read.window or time.monotonic() - read.mono_start > read.window:
         complete = False
+        queue_complete = False
     if any(j['queued_at'] > stamp or (j['started_at'] or 0) > stamp for j in jobs):
         complete = False
+        queue_complete = False
     return {'repository': repo, 'observed_at': stamp, 'complete': complete,
-            'queue': {'complete': complete, 'jobs': jobs}, 'budgets': budgets}
+            'queue': {'complete': queue_complete, 'jobs': jobs}, 'budgets': budgets}
 
 
 def write(path, data):

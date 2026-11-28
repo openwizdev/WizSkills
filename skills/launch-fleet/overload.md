@@ -17,8 +17,10 @@ When neither `LAUNCH_FLEET_OVERLOAD_SUPPLY` nor `LAUNCH_FLEET_OVERLOAD_INPUT`
 is set, `fleet.sh overload` runs the shipped default supplier
 [`scripts/overload-supply.py`](scripts/overload-supply.py) before
 `merge-batch`, `automatic-refresh` and `nonessential-poll`, writing one
-private snapshot of active workflow runs, jobs and REST/GraphQL rate limits
-for that call alone. Set `LAUNCH_FLEET_OVERLOAD_INPUT` to supply an existing
+private snapshot of active workflow runs, jobs (classified from the default
+branch's required status checks and `docs/agents/fleet.md`'s `## CI checks`)
+and REST/GraphQL rate limits within the 60-second observation deadline for
+that call alone. Set `LAUNCH_FLEET_OVERLOAD_INPUT` to supply an existing
 snapshot without network calls, or set `LAUNCH_FLEET_OVERLOAD_SUPPLY` to the
 absolute path of a repository's own supplier (such as an OpenWiz checkout's
 CI overload supply script; `LAUNCH_FLEET_OVERLOAD_INPUT` is then unused,

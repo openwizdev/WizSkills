@@ -857,6 +857,114 @@ class Identity(Case):
                 self.assertEqual(code, 0, out + err)
 
 
+class Seed(Case):
+    source = 'example/public-history'
+    prefix = 'src/export'
+
+    def split_source(self, **identity):
+        upstream = self.dir / 'public.git'
+        self.git('init', '-q', '--bare', str(upstream))
+        self.git('checkout', '-q', 'main')
+        self.write('src/export/run.py', 'x = 2\n')
+        self.commit('public author', GIT_AUTHOR_NAME='Robin Dev')
+        self.write('src/export/run.py', 'x = 3\n')
+        self.commit('public merge', **identity)
+        source_tip = self.git('rev-parse', 'HEAD').strip()
+        self.git('push', '-q', str(upstream), 'main')
+        self.git('config', f'url.{upstream}.insteadOf', f'https://github.com/{self.source}.git')
+        self.metadata = self.dir / 'metadata.json'
+        self.metadata.write_text(json.dumps({'full_name': self.source, 'visibility': 'public',
+                                             'private': False, 'default_branch': 'main'}))
+        ref = self.dir / 'source-ref.json'
+        ref.write_text(json.dumps({'ref': 'refs/heads/main', 'object': {'type': 'commit', 'sha': source_tip}}))
+        (self.bin / 'gh').write_text(
+            f'#!/bin/sh\ncase "$*" in\n'
+            f'  "api repos/{self.source}") cat "{self.metadata}" ;;\n'
+            f'  "api repos/{self.source}/git/ref/heads/main") cat "{ref}" ;;\n'
+            '  *) exit 9 ;;\nesac\n')
+        self.split = self.git('subtree', 'split', '--ignore-joins', '--prefix', self.prefix, source_tip).strip()
+        self.git('checkout', '-q', '-B', 'work', self.split)
+        self.git('update-ref', '-d', 'refs/heads/main', GIT_DIR=str(self.origin))
+        self.seed_from = f'{self.source}@{source_tip}:{self.prefix}'
+        self.receipt = self.dir / 'seed-receipt.txt'
+
+    def seed(self):
+        return self.run_ticket('push', str(self.receipt), '--seed-from', self.seed_from,
+                               '--', 'git', 'push', '-q', 'origin', 'HEAD')
+
+    def remote_refs(self):
+        return self.git('ls-remote', '--refs', 'origin')
+
+    def test_seed_preserves_c3_valid_history_and_safe_retry_keeps_first_receipt(self):
+        self.split_source(GIT_COMMITTER_NAME='GitHub', GIT_COMMITTER_EMAIL='noreply@github.com')
+        code, out, err = self.run_ticket('push', str(self.receipt), '--', 'git', 'push', '-q', 'origin', 'HEAD')
+        self.assertEqual((code, last(out)), (1, f'push refused: commit {self.split[:12]} committer is not '
+                                                'a GitHub noreply address; nothing pushed'), err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+        hook = self.origin / 'hooks' / 'pre-receive'
+        hook.write_text('#!/bin/sh\nexit 1\n')
+        hook.chmod(0o755)
+        code, out, err = self.seed()
+        self.assertEqual((code, last(out)), (1, 'push failed: no receipt'), out + err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+        hook.unlink()
+        code, out, err = self.seed()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.remote_refs(), f'{self.split}\trefs/heads/work\n')
+        first = self.receipt.read_text()
+        self.assertRegex(first, rf'^First successful push: {self.split} at \S+\n$')
+
+        code, out, err = self.seed()
+        self.assertEqual((code, last(out)), (1, 'push refused: seed history requires an empty origin; nothing pushed'), err)
+        self.assertEqual((self.remote_refs(), self.receipt.read_text()),
+                         (f'{self.split}\trefs/heads/work\n', first))
+
+    def test_seed_refuses_unreadable_source_and_unrelated_history(self):
+        self.split_source()
+        metadata = self.metadata.read_bytes()
+        self.metadata.unlink()
+        code, _, err = self.seed()
+        self.assertEqual(code, 2)
+        self.assertIn('cannot read the seed source repository', err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+        self.metadata.write_bytes(metadata)
+        self.git('checkout', '-q', '-B', 'work', 'main')
+        code, out, err = self.seed()
+        self.assertEqual((code, last(out)), (1, 'push refused: the public split is not in HEAD; nothing pushed'), err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+    def test_seed_refuses_a_push_that_disables_hooks_or_overwrites_refs(self):
+        self.split_source()
+        for push_args in (('--no-verify', 'origin', 'HEAD'), ('--force', 'origin', 'HEAD'),
+                          ('origin', '+HEAD:refs/heads/work'), ('origin', 'HEAD:refs/tags/work')):
+            with self.subTest(push_args=push_args):
+                code, out, err = self.run_ticket('push', str(self.receipt), '--seed-from', self.seed_from,
+                                                  '--', 'git', 'push', '-q', *push_args)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn('the command must push HEAD to origin', out)
+                self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+    def test_seed_refuses_github_webflow_as_historical_author(self):
+        self.split_source(GIT_AUTHOR_NAME='GitHub', GIT_AUTHOR_EMAIL='noreply@github.com')
+        code, out, err = self.seed()
+        self.assertEqual((code, last(out)), (1, f'push refused: commit {self.split[:12]} author is not '
+                                                'a GitHub noreply address; nothing pushed'), err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+    def test_seed_keeps_strict_identity_for_new_commits(self):
+        self.split_source()
+        self.write('run.py', 'x = 4\n')
+        self.commit('new', GIT_AUTHOR_NAME='Robin Dev')
+        head = self.git('rev-parse', 'HEAD').strip()
+        code, out, err = self.seed()
+        self.assertEqual((code, last(out)), (1, f'push refused: commit {head[:12]} author name is not '
+                                                "its noreply address's login; nothing pushed"), err)
+        self.assertEqual((self.remote_refs(), self.receipt.exists()), ('', False))
+
+
 class SkillText(unittest.TestCase):
     def test_the_one_allowed_wait_finishes_push_and_matches_the_remote_tip(self):
         lines = (HERE.parent / 'SKILL.md').read_text(encoding='utf-8').splitlines()

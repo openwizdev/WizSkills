@@ -36,7 +36,9 @@ Dispatch provers from a different model family than the scouts. A program candid
 python3 -I scripts/links.py canaries --ledger <ledger.jsonl> --settings <settings.json> --seed <YYYY-MM-DD> --out <seeds.json>
 ```
 
-Mix seeded known-true and known-junk links into each prover's work under distinct opaque IDs, including fresh provers. Confirm seed truth from independent evidence before using it. If enough seeds cannot be verified, record the gap and hold link confirmations. Reserve budget for seeds and second checks before sending first passes. Count all evaluated pairs against `link_budget` and report anything left over as unproven.
+Reserve `link_budget` for seed qualification, blind seed judgments and second checks before spending it on first passes. If the ledger is new or either pool is short, select held-out pairs from the pinned sources. Have an independent prover establish a true connection and its exact decision change, and a plausible-looking junk pair with readable ends and no shared behavior or decision. Record the evidence and expected verdicts in the private seed key. Keep these pairs out of the current candidate batch and ledger transitions. If either kind still lacks verified seeds, record the gap and hold link confirmations.
+
+Mix verified known-true and known-junk links into each prover's work under distinct opaque IDs, including fresh provers. Confirm seed truth from independent evidence before using it. Count seed qualification and all blinded evaluations against `link_budget`, and report anything left over as unproven.
 
 Score each prover against the seed key after the files arrive. Keep one private result per seed. A missing, wrong or invalid verdict is a miss, as is a wrong decision on a known-true seed. For `report`, create `report-canaries.json` with a `canaries` array of `{id, expected}` rows using the issued IDs and the seed's `expected_verdict`. Put coverage gaps or failed decision checks in the `missed` array as `{id, expected, actual}` rows, with the reasons in the private proof notes. Include seed verdicts with those same IDs in the report's verdict directory, never in its findings.
 

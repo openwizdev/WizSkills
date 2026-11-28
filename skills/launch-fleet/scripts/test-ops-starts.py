@@ -1102,7 +1102,7 @@ class ModelsTable(unittest.TestCase):
                 self.assertEqual(plan['polish'], ['R2'])
                 self.assertIn('R1', plan['builder_message'])
                 self.assertNotIn('R2', plan['builder_message'])
-                self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+                self.assertIsNone(plan['findings_record'])
                 self.assertEqual(len(plan['follow_ups']), 1)
                 fu = plan['follow_ups'][0]
                 self.assertEqual(fu['id'], 'R2')
@@ -1132,18 +1132,6 @@ class ModelsTable(unittest.TestCase):
                 self.assertNotIn('R2', plan['builder_message'])
                 self.assertNotIn('R3', plan['builder_message'])
 
-            with self.subTest('all-polish sort sends no builder message and logs all follow-ups'):
-                run, _ = route(tmp, enabled, 'R1: polish\nR2: polish\n')
-                self.assertEqual((run.returncode, run.stderr), (0, ''))
-                plan = json.loads(run.stdout)
-                self.assertEqual(plan['mode'], 'sorted')
-                self.assertEqual(plan['record'], f'launch-fleet: review sort {head}: R1 polish, R2 polish')
-                self.assertEqual(plan['blocking'], [])
-                self.assertEqual(plan['polish'], ['R1', 'R2'])
-                self.assertIsNone(plan['builder_message'])
-                self.assertEqual([f['id'] for f in plan['follow_ups']], ['R1', 'R2'])
-                self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}: sorted polish only')
-
             with self.subTest('all-blocking sort sends all ids to builder and files no follow-ups'):
                 run, _ = route(tmp, enabled, 'R1: blocking\nR2: blocking\n')
                 self.assertEqual((run.returncode, run.stderr), (0, ''))
@@ -1155,10 +1143,7 @@ class ModelsTable(unittest.TestCase):
                 self.assertEqual(plan['follow_ups'], [])
                 self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
 
-            for spot, suffix in (
-                ('match', ' (spot-check: match)'),
-                ('mismatch', ' (spot-check: mismatch; revert to off)'),
-            ):
+            for spot, suffix in (('match', ' (spot-check: match)'),):
                 with self.subTest(spot_check=spot):
                     run, _ = route(tmp, enabled, 'R1: blocking\nR2: polish\n', '--spot-check', spot)
                     self.assertEqual((run.returncode, run.stderr), (0, ''))

@@ -115,6 +115,50 @@ class Written(unittest.TestCase):
             with self.subTest(evidence=evidence):
                 self.assertEqual(self.run_with(evidence + named), (0, ['complete: ok']) if red else (1, [RED]))
 
+    def test_inline_after_ends_the_before_run(self):
+        named = '\n- Criteria 1-3: error handling verified.'
+        table = {
+            'Before: n/a. After: no test failed.': (1, [RED]),
+            'Before: n/a. After: OK.': (1, [RED]),
+            'Before: n/a.\nNo run. After: no test failed.': (1, [RED]),
+            '- **Before:** n/a. **After:** no test failed.': (1, [RED]),
+            'Before: FAILED (failures=2). After: OK.': (0, ['complete: ok']),
+        }
+        for evidence, expected in table.items():
+            with self.subTest(evidence=evidence):
+                self.assertEqual(self.run_with(evidence + named), expected)
+
+    def test_subheadings_open_and_close_the_before_run(self):
+        named = '\nCriteria 1, 2 and 3 pass.'
+        table = {
+            '### Before\nFAILED (failures=2)\n\n### After\nOK.': (0, ['complete: ok']),
+            'Before: n/a\n\n### After\nNo test failed.': (1, [RED]),
+            '### Before\nn/a\n\n### After\nNo test failed.': (1, [RED]),
+        }
+        for evidence, expected in table.items():
+            with self.subTest(evidence=evidence):
+                self.assertEqual(self.run_with(evidence + named), expected)
+
+    def test_dash_separators_do_not_supply_criterion_numbers(self):
+        before = 'Before: FAILED (failures=2)\n\nAfter: OK.\n'
+        table = {
+            '- Criterion 1 - 3 tests passed.': [EMPTY, KEPT],
+            '- AC1 - 5 assertions green.': [EMPTY, KEPT],
+            '- Criteria 1 -3 tests passed.': [EMPTY, KEPT],
+            '## Self-check\n- Criterion 1- 3 tests passed.': [EMPTY, KEPT],
+            '- Criteria 1 – 3 tests passed.': [EMPTY, KEPT],
+        }
+        for evidence, gaps in table.items():
+            with self.subTest(evidence=evidence):
+                self.assertEqual(self.run_with(before + evidence), (1, gaps))
+
+    def test_tight_dash_and_word_ranges_include_intermediate_criteria(self):
+        before = 'Before: FAILED (failures=2)\n\nAfter: OK.\n'
+        for evidence in ('Criteria 1-3 pass.', 'Criteria 1–3 pass.', 'CRITERIA 1 TO 3 pass.',
+                         '## Self-check\n- Criteria 1–#3 pass.'):
+            with self.subTest(evidence=evidence):
+                self.assertEqual(self.run_with(before + evidence), (0, ['complete: ok']))
+
     def test_without_a_closes_line_any_tickets_note_counts(self):
         evidence = 'Before: FAILED\ncriteria 1, 2 and 3: ok'
         self.assertEqual(self.run_with(evidence, head='No closing line'), (0, ['complete: ok']))

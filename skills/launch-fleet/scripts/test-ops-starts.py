@@ -1202,6 +1202,112 @@ class ModelsTable(unittest.TestCase):
                 self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
                                  (2, '', 'ops-starts: refused: '))
 
+    def test_review_sort_never_strands_or_misroutes_a_verdict(self):
+        post_mod = load(HERE / 'post.py', 'launch_fleet_post')
+        head = 'a' * 40
+        pr = 'synthetic/ops#31'
+        enabled = self.one + '\n## Review sort\n\nReview sort: Gemini Neon Low\n'
+        today_msg = (
+            f'The review of pull request {pr} at {head} asks for changes: read the report there. '
+            'Fix or dispute each open blocking finding once, then hand back a new green head.'
+        )
+
+        def route(tmp, sort_text, *extra, ids='R1,R2', spec=('--spec', '5')):
+            run, _ = run_cli(
+                tmp, enabled, 'review-sort-route', '--repo', 'synthetic/ops', '--pr', pr, '--head', head,
+                '--ids', ids, '--ticket-repo', 'synthetic/ops', '--ticket', '12', *spec, *extra, '-',
+                stdin=sort_text,
+            )
+            self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+            return json.loads(run.stdout)
+
+        def today(plan, reason, blocking):
+            self.assertEqual((plan['mode'], plan['reason']), ('fallback', reason))
+            self.assertEqual((plan['blocking'], plan['polish'], plan['follow_ups']), (blocking, [], []))
+            self.assertEqual(plan['builder_message'], today_msg)
+            self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.subTest('an all-polish sort takes the existing path, so the head never waits on nobody'):
+                plan = route(tmp, 'R1: polish\nR2: polish\n')
+                today(plan, 'the sort left no blocking finding', ['R1', 'R2'])
+                self.assertIsNone(plan['record'])
+
+            with self.subTest('a spot-check mismatch discards the labels before any follow-up or fixer'):
+                plan = route(tmp, 'R1: polish\nR2: blocking\n', '--spot-check', 'mismatch')
+                today(plan, 'spot-check mismatch', ['R1', 'R2'])
+                self.assertEqual(plan['record'], f'launch-fleet: review sort {head}: spot-check mismatch, '
+                                                 'labels discarded; revert to off')
+                post_mod.check(plan['record'])
+
+            with self.subTest('a Risk finding is never sorted out of the fix round'):
+                plan = route(tmp, 'R1: polish\nR2: blocking\n', '--risk', 'R1')
+                today(plan, 'the sort called Risk finding R1 polish', ['R1', 'R2'])
+                self.assertIsNone(plan['record'])
+                kept = route(tmp, 'R1: blocking\nR2: polish\n', '--risk', 'R1')
+                self.assertEqual((kept['mode'], kept['blocking'], kept['polish']), ('sorted', ['R1'], ['R2']))
+
+            with self.subTest('a standalone ticket routes and files follow-ups under its own number'):
+                plan = route(tmp, 'R1: blocking\nR2: blocking\n', spec=())
+                self.assertEqual((plan['mode'], plan['blocking'], plan['follow_ups']), ('sorted', ['R1', 'R2'], []))
+                self.assertEqual(plan['findings_record'], f'launch-fleet: findings sent {head}')
+                plan = route(tmp, 'R1: blocking\nR2: polish\n', spec=())
+                argv = plan['follow_ups'][0]['argv']
+                self.assertEqual(argv[argv.index('--ticket'):argv.index('--pr')],
+                                 ['--ticket', '12', '--spec', '12'])
+
+            with self.subTest('a mixed sort leaves its findings record to the handoff, after the follow-ups'):
+                plan = route(tmp, 'R1: blocking\nR2: polish\n')
+                self.assertEqual((plan['mode'], plan['blocking'], plan['polish']), ('sorted', ['R1'], ['R2']))
+                self.assertIsNone(plan['findings_record'])
+
+            def handoff(*args):
+                run, gh_log = run_cli(tmp, enabled, 'review-sort-handoff', *args)
+                self.assertEqual(gh_log, [])
+                return run
+
+            findings = f'launch-fleet: findings sent {head}: review sort kept R1 and R4; follow-ups R3 #451, R5 #452'
+            with self.subTest('the handoff carries each sorted finding to the next head'):
+                run = handoff('--head', head, '--blocking', 'R1,R4', '--filed', 'R3=451,R5=452')
+                self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                first = json.loads(run.stdout)
+                self.assertEqual(first['findings_record'], findings)
+                post_mod.check(first['findings_record'])
+                self.assertEqual(first['recheck_ids'], 'R1,R4')
+                self.assertEqual(first['reviewer_note'], (
+                    f'Review sort at {head}: the fix round covered only R1 and R4. R3 (follow-up #451) and R5 '
+                    '(follow-up #452) were sorted polish before the fix round: never re-check or file them '
+                    'again. Give each the status `still open after the re-check: sorted polish before the fix '
+                    'round. Logged as follow-up #<its issue>.`'
+                ))
+                run = handoff('--record', findings)
+                self.assertEqual((run.returncode, run.stderr), (0, ''), run.stdout)
+                self.assertEqual(json.loads(run.stdout), first)
+
+            refused = (
+                ('a plain findings record', ['--record', f'launch-fleet: findings sent {head}']),
+                ('another head suffix', ['--record', f'launch-fleet: findings sent {head}: asked the orchestrator']),
+                ('no kept finding', ['--head', head, '--blocking', '', '--filed', 'R3=451']),
+                ('no filed follow-up', ['--head', head, '--blocking', 'R1', '--filed', '']),
+                ('an id both kept and filed', ['--head', head, '--blocking', 'R1', '--filed', 'R1=451']),
+                ('a follow-up with no issue', ['--head', head, '--blocking', 'R1', '--filed', 'R3']),
+                ('a short head', ['--head', 'abc1234', '--blocking', 'R1', '--filed', 'R3=451']),
+                ('both forms', ['--record', findings, '--head', head]),
+            )
+            for name, args in refused:
+                with self.subTest(name):
+                    run = handoff(*args)
+                    self.assertEqual((run.returncode, run.stdout, run.stderr[:21]),
+                                     (2, '', 'ops-starts: refused: '))
+
+    def test_reviews_reference_routes_every_sort_outcome(self):
+        text = (HERE.parent / 'references/reviews.md').read_text()
+        self.assertNotIn('sorted polish only', text)
+        for needed in ('review-sort-handoff', '--risk', 'the sort left no blocking finding', 'spot-check mismatch'):
+            self.assertIn(needed, text)
+        recheck = next(p for p in text.split('\n\n') if p.startswith('**A re-check**'))
+        self.assertIn('review-sort-handoff --record', recheck)
+
     def test_gemini_antigravity_cross_family_reviews_both_ways(self):
         claude = dict(provider='claude-code', model='claude-opus-5-5', effort='medium')
         gemini = dict(provider='antigravity', model='gemini-4-neon', effort='medium')

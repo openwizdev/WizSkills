@@ -195,15 +195,16 @@ printf '%s\n' 'import runpy, sys' "open('$work/order.log', 'a').write('helper\\n
   "runpy.run_path('$FIX/token_service.py', run_name='__main__')" > "$work/service-order.py"
 cp "$work/world-on.json" "$work/world.json"
 (service; export OPENWIZ_TOKEN_SERVICE="$work/service-order.py"; : > "$work/gh-key.log"; : > "$work/read.log"; : > "$work/order.log"
-  identity 'none account' "$off"
+  identity "$ga4 installation" ''
   [ "$(cat "$work/read.log")" = 'none account' ]
   [ "$(cat "$work/order.log")" = "$(printf 'read\nhelper')" ])
 [ "$(jq -c .legacy_key "$work/service.log")" = false ]
 [ "$(jq -c .request "$work/service.log")" = '{"schema":"openwiz.token-service.v1","kind":"request","requester":"fleet-check","repositories":["synthetic-owner/synthetic-repo"],"permissions":{"metadata":"read","contents":"read","issues":"read","pull_requests":"read","checks":"read","actions":"read"}}' ]
 [ "$(jq -c .argv "$work/service.log")" = '["mint"]' ]
 ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
+[ -z "$(find "$work/token-private" -name 'step-*.json')" ]
 cp "$work/world-off.json" "$work/world.json"
-echo "ok   with the App identity on and a token service, one account read of fleet.md, then one read-only helper run; its continuation stays on today's account (#1846, #2835)"
+echo "ok   with the App identity on and a token service, one account read of fleet.md, then one read-only helper run; its bound continuation reads GitHub as the installation (#1846, #2835, #2869)"
 mkdir "$work/probe"
 for tool in mktemp mkdir cat; do
   printf '#!/bin/sh\n[ -n "${OPENWIZ_GITHUB_APP_KEY+set}" ] && echo key >> "%s" || echo no-key >> "%s"\nexec %s "$@"\n' \
@@ -288,6 +289,93 @@ for marker in '$$' ''; do
     [ ! -s "$work/service.log" ])
 done
 echo "ok   a matching step marker with inherited shims runs every command as today's account (#2843)"
+
+direct_loop="$work/installed/skills/launch-fleet/scripts/loop.sh"
+for mode in ppid pid; do
+  (service; inherit; rm -rf "$work/cache"; : > "$work/read.log"
+    if [ "$mode" = ppid ]; then
+      sh -c 'LAUNCH_FLEET_TOKEN_STEP=$$; export LAUNCH_FLEET_TOKEN_STEP; sh "$1"' sh "$direct_loop" \
+        > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+    else
+      sh -c 'LAUNCH_FLEET_TOKEN_STEP=$$; export LAUNCH_FLEET_TOKEN_STEP; exec sh "$1"' sh "$direct_loop" \
+        > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+    fi
+    cmp "$work/want" "$work/out"
+    [ "$(head -n 1 "$work/err")" = "$off" ]
+    [ "$(wc -l < "$work/err" | tr -d ' ')" = 2 ]
+    [ "$(cat "$work/read.log")" = 'none account' ]
+    dropped
+    [ ! -s "$work/service.log" ])
+done
+cp "$work/world-on.json" "$work/world.json"
+(service; export OPENWIZ_TOKEN_SERVICE="$work/service-order.py"; inherit; rm -rf "$work/cache"
+  : > "$work/read.log"; : > "$work/order.log"
+  sh -c 'LAUNCH_FLEET_TOKEN_STEP=$$; export LAUNCH_FLEET_TOKEN_STEP; sh "$1"' sh "$direct_loop" \
+    > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+  cmp "$work/want" "$work/out"
+  [ ! -s "$work/shim.log" ]
+  [ "$(cat "$work/read.log")" = 'none account' ]
+  [ "$(cat "$work/order.log")" = "$(printf 'read\nhelper')" ]
+  [ -s "$work/gh-token.log" ]
+  [ -z "$(grep -vx "$ga4 installation" "$work/gh-token.log")" ]
+  [ "$(grep -c '^fleet.sh: used ' "$work/err")" = 1 ]
+  [ "$(wc -l < "$work/err" | tr -d ' ')" = 1 ]
+  ! grep -q "$ga4" "$work/out" "$work/err" "$work/gh.log"
+  [ -z "$(find "$work/token-private" -name 'step-*.json')" ])
+(service; export OPENWIZ_TOKEN_SERVICE="$work/service-order.py" FAKE_SERVICE_REFUSE=1
+  rm -rf "$work/cache"; : > "$work/read.log"; : > "$work/order.log"; : > "$work/gh-token.log"
+  sh "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; }
+  cmp "$work/want" "$work/out"
+  [ "$(cat "$work/read.log")" = 'none account' ]
+  [ "$(cat "$work/order.log")" = "$(printf 'read\nhelper')" ]
+  [ -s "$work/gh-token.log" ]
+  [ -z "$(grep -vx 'none account' "$work/gh-token.log")" ]
+  grep -q 'no openwiz\[bot\] token' "$work/err"
+  [ -z "$(find "$work/token-private" -name 'step-*.json')" ])
+cp "$work/world-off.json" "$work/world.json"
+for bad_step in missing bad-nonce bad-pid bad-repo bad-mode symlink; do
+  (service; inherit; rm -rf "$work/cache"; : > "$work/read.log"
+    sid=0123456789abcdef0123456789abcdef
+    nonce=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    other=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    sfile="$work/token-private/step-$sid.json"
+    rfile="$work/token-private/run-0123456789abcdef0123456789abcdef.json"
+    printf '{"token":"%s","expires_at":1793538000}\n' "$ga4" > "$rfile"
+    chmod 600 "$rfile"
+    export OPENWIZ_AGENT_TOKEN_RUN="$rfile"
+    case $bad_step in
+      missing) ;;
+      bad-nonce)
+        sh -c 'printf "{\"pid\":%s,\"nonce\":\"%s\",\"repo\":\"synthetic-owner/synthetic-repo\"}\n" "$$" "$2" > "$1"; chmod 600 "$1"; LAUNCH_FLEET_TOKEN_STEP="$3:$4"; export LAUNCH_FLEET_TOKEN_STEP; sh "$5"' \
+          sh "$sfile" "$other" "$sid" "$nonce" "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; } ;;
+      bad-pid)
+        printf '{"pid":1,"nonce":"%s","repo":"synthetic-owner/synthetic-repo"}\n' "$nonce" > "$sfile"; chmod 600 "$sfile" ;;
+      bad-repo)
+        sh -c 'printf "{\"pid\":%s,\"nonce\":\"%s\",\"repo\":\"other/repo\"}\n" "$$" "$2" > "$1"; chmod 600 "$1"; LAUNCH_FLEET_TOKEN_STEP="$3:$2"; export LAUNCH_FLEET_TOKEN_STEP; sh "$4"' \
+          sh "$sfile" "$nonce" "$sid" "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; } ;;
+      bad-mode)
+        sh -c 'printf "{\"pid\":%s,\"nonce\":\"%s\",\"repo\":\"synthetic-owner/synthetic-repo\"}\n" "$$" "$2" > "$1"; chmod 644 "$1"; LAUNCH_FLEET_TOKEN_STEP="$3:$2"; export LAUNCH_FLEET_TOKEN_STEP; sh "$4"' \
+          sh "$sfile" "$nonce" "$sid" "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; } ;;
+      symlink)
+        printf '{"pid":1,"nonce":"%s","repo":"synthetic-owner/synthetic-repo"}\n' "$nonce" > "$work/step-target.json"; chmod 600 "$work/step-target.json"
+        ln -s "$work/step-target.json" "$sfile" ;;
+    esac
+    case $bad_step in
+      missing | bad-pid | symlink)
+        LAUNCH_FLEET_TOKEN_STEP="$sid:$nonce" sh "$direct_loop" > "$work/out" 2> "$work/err" || { cat "$work/err" >&2; exit 1; } ;;
+    esac
+    cmp "$work/want" "$work/out"
+    [ "$(head -n 1 "$work/err")" = "$off" ]
+    [ "$(cat "$work/read.log")" = 'none account' ]
+    dropped
+    [ ! -s "$work/service.log" ])
+done
+(service; rm -rf "$work/cache"
+  LAUNCH_FLEET_TOKEN_STEP=synthetic-step-sentinel-2869 sh -x "$direct_loop" > "$work/out" 2> "$work/trace" \
+    || { cat "$work/trace" >&2; exit 1; }
+  cmp "$work/want" "$work/out"
+  absent -F synthetic-step-sentinel-2869 "$work/trace")
+echo "ok   inherited or forged continuation tokens are rejected and re-read, while approved-read continuations verify and consume their private token (#2869)"
 
 sed -n '/<!-- GI7 identity -->/,/^  ```$/p' "$HERE/../references/identity.md" | sed '1,2d;$d;s/^  //' > "$work/block.sh"
 (inherit

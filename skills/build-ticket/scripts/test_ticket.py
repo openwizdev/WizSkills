@@ -857,5 +857,31 @@ class Identity(Case):
                 self.assertEqual(code, 0, out + err)
 
 
+class SkillText(unittest.TestCase):
+    def test_the_one_allowed_wait_finishes_push_and_matches_the_remote_tip(self):
+        lines = (HERE.parent / 'SKILL.md').read_text(encoding='utf-8').splitlines()
+        rule = [line for line in lines if '**Never wait awake:**' in line]
+        step = [line for line in lines if line.startswith('3. Push every checkpoint')]
+        self.assertEqual((len(rule), len(step)), (1, 1))
+        duty = ('The one wait this rule allows is finishing `git push` and its pre-push hook '
+                'in the same turn, then confirming the remote tip equals its local head before the turn ends.')
+        self.assertIn(duty, rule[0])
+        self.assertIn('no watcher, poll loop or `sleep` for CI, a review or another thread', rule[0])
+        self.assertIn('In the same turn, finish that push and its pre-push hook, then confirm '
+                      'the remote tip equals its local head before the turn ends.', step[0])
+
+    def test_identity_repair_is_gated_on_refusal_and_not_after_verified_push(self):
+        lines = (HERE.parent / 'SKILL.md').read_text(encoding='utf-8').splitlines()
+        step = [line for line in lines if line.startswith('3. Push every checkpoint')]
+        self.assertEqual(len(step), 1)
+        repair = 'Only on an identity refusal, run `$T author` and redo only those commits'
+        finish = ('In the same turn, finish that push and its pre-push hook, then confirm '
+                  'the remote tip equals its local head before the turn ends.')
+        self.assertNotIn('Then run `$T author`', step[0])
+        self.assertIn(repair, step[0])
+        self.assertIn(finish, step[0])
+        self.assertLess(step[0].index(repair), step[0].index(finish))
+
+
 if __name__ == '__main__':
     unittest.main()

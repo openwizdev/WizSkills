@@ -916,6 +916,9 @@ EOF
 expect 'base red: a later wake sees the issue before search does' 0 check.json 'red31 | open_pr(32; 13; "#13: widget page, green") | pull(32; .rollup = "FAILURE" | .checks[1].conclusion = "FAILURE") | main_red | fix_claim(9001; "launch-fleet: base fix opened #90")' -- wake 32 <<EOF
 base red #32 for #13 at $S32: test fails on main at $S77 too; record paused, base red $S77 test; head $S32, and leave its builder be
 EOF
+expect 'base red: an interrupted issue create stays visible for reconciliation' 0 check.json 'red31 | main_red | bound_pause31 | fix_claim(9001; "launch-fleet: base fix opening") | .commitComments[0].created_at = at("11:10")' -- check <<EOF
+base red #31 for #12 at $S31: pause already recorded at $S77; reconcile fix issue claim 9001
+EOF
 expect 'base red: an existing multi-check fix covers a narrower PR failure' 0 check.json 'red31 | base_runs([["build", "failure"], ["test", "failure"]]) | fix_issue(90; "Main is red: build")' -- check <<EOF
 base red #31 for #12 at $S31: test fails on main at $S77 too; record paused, base red $S77 test; head $S31, and leave its builder be
 EOF
@@ -4701,7 +4704,7 @@ case ${TEST_ONLY:-} in
   'GI2:*') expected=13 ;;
   'CW-G:*') expected=4 ;;
   'cross-repository PR:*') expected=12 ;;
-  'base red:*') expected=28 ;;
+  'base red:*') expected=29 ;;
   'FR9:*') expected=11 ;;
 esac
 cases=$((cases - support))

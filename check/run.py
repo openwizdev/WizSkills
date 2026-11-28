@@ -33,6 +33,7 @@ SUITES = {
                 ['python3', '-I', 'skills/install/tests/test_doctor.py'],
                 ['python3', '-I', 'skills/install/tests/test_onboarding.py']],
     'huntr': [['sh', 'skills/huntr/scripts/test.sh']],
+    'state-hunt': [['node', '--test', 'skills/state-hunt/scripts/check.test.mjs']],
     'grill': [['sh', 'skills/grill/scripts/test.sh'],
               ['python3', '-I', 'skills/grill/scripts/test_records.py']],
     'role-call': [['python3', '-I', 'skills/role-call/scripts/test_channel.py']],

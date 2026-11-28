@@ -96,24 +96,26 @@ test('sets coalesce by membership, use Unicode code-point order and respect doma
     variables: {
       tags: { type: 'set', items: ['𐀀', '\uE000', 'overflow'], maxSize: 2 },
       peer: { type: 'set', items: ['𐀀', '\uE000', 'overflow'], maxSize: 1 },
+      phase: { type: 'enum', values: ['clean', 'broken'] },
     },
-    init: { tags: ['𐀀', '\uE000'], peer: [] },
+    init: { tags: ['𐀀', '\uE000'], peer: [], phase: 'clean' },
     actions: [
       action('reorder', true, assign('tags', ['\uE000', '𐀀'])),
       action('copy-too-many', true, assign('peer', ref('tags'))),
-      action('add-too-many', true, { op: 'add', var: 'tags', item: 'overflow' }),
+      action('add-too-many', pred('in', '𐀀', ref('tags')), { op: 'add', var: 'tags', item: 'overflow' }),
       action('remove-one', pred('in', '𐀀', ref('tags')), { op: 'remove', var: 'tags', item: '𐀀' }),
-      action('add-one', pred('not', pred('in', '𐀀', ref('tags'))), { op: 'add', var: 'tags', item: 'overflow' }),
+      action('add-one', pred('not', pred('in', '𐀀', ref('tags'))),
+        { op: 'add', var: 'tags', item: '𐀀' }, assign('phase', 'broken')),
     ],
-    invariants: { consistent: pred('not', pred('in', 'overflow', ref('tags'))) },
+    invariants: { consistent: pred('eq', ref('phase'), 'clean') },
   });
   assert.deepEqual(run(file), {
     exit: 1,
     report: {
       status: 'counterexample', statesExplored: 4, kind: 'invariant', name: 'consistent',
       trace: [
-        { action: 'remove-one', state: { tags: ['\uE000'], peer: [] } },
-        { action: 'add-one', state: { tags: ['overflow', '\uE000'], peer: [] } },
+        { action: 'remove-one', state: { tags: ['\uE000'], peer: [], phase: 'clean' } },
+        { action: 'add-one', state: { tags: ['\uE000', '𐀀'], peer: [], phase: 'broken' } },
       ],
     },
   });
@@ -143,7 +145,6 @@ const rejected = {
   'extra root property': { ...model, extra: false },
   'reversed bounds': { ...model, variables: { retries: { type: 'int', min: 3, max: 2 } } },
   'init outside domain': { ...model, init: { retries: 3 } },
-  'unknown init key': { ...model, init: { other: 0 } },
   'unsafe integer': { ...model, bound: Number.MAX_SAFE_INTEGER + 1 },
   'duplicate key with an escaped spelling': JSON.stringify(model).replace('"init":', '"\\u0069nit":{},"init":'),
   'invalid UTF-8 in a string': Buffer.concat([Buffer.from('{"machine":"'), Buffer.from([0xff]), Buffer.from('"}')]),
@@ -169,8 +170,12 @@ test('reports fixed errors for missing arguments and unreadable files', (t) => {
   assert.deepEqual(run(join(dir, 'absent.json')), invalid('unreadable'));
 });
 
+test('rejects an undeclared init key as an unknown variable', (t) => {
+  assert.deepEqual(run(withModel(t, { ...model, init: { other: 0 } }).file), invalid('unknown-variable'));
+});
+
 test('runs in an empty dependency tree with filesystem-only imports and no fetch', (t) => {
-  const { file, dir } = withModel(t, { ...model, final: true });
+  const { file, dir } = withModel(t, readFileSync(new URL('progress-blocked.json', fixtures)));
   const script = join(dir, 'check.mjs');
   copyFileSync(checker, script);
   const moduleUrl = (code) => `data:text/javascript,${encodeURIComponent(code)}`;
@@ -186,7 +191,5 @@ test('runs in an empty dependency tree with filesystem-only imports and no fetch
     globalThis.fetch = () => { throw new Error('Checker called fetch'); };
     process.getBuiltinModule = () => { throw new Error('Checker loaded a builtin dynamically'); };
   `);
-  assert.deepEqual(run(file, { script, cwd: dir, flags: ['--import', preload] }), {
-    exit: 0, report: { status: 'ok', statesExplored: 1 },
-  });
+  assert.deepEqual(run(file, { script, cwd: dir, flags: ['--import', preload] }), expected['progress-blocked']);
 });

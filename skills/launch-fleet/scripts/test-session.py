@@ -1094,6 +1094,7 @@ class Session(unittest.TestCase):
                          'a supplier that leaves no observation must not latch a pause')
         out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
         self.assertIn('#12 merged', out)
+        self.assertEqual(self.probes(), 0)
 
     def test_with_a_healthy_supplier_the_session_makes_no_probe_of_its_own(self):
         self.approved()

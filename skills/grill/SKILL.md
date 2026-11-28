@@ -1,34 +1,31 @@
 ---
 name: grill
-description: Settle a design through a recorded interview. Use when asked to grill, before planning an unsettled design or to resume an open grill.
+description: Map the decision tree and settle it one question at a time. Use when asked to grill, before an unsettled plan, to resume a grill, or when a builder grills a spec alone.
 version: 0.2.2
 ---
 
 # Grill
 
-Settle the design with the user and leave a confirmed, resumable private
-record. Look up facts yourself. The user makes the decisions. A grill gives
-no authority to plan from unsettled answers, start tickets, build, or review.
+Settle the design before anyone plans or builds. Map every decision from
+the repo first. The user makes the decisions. A grill gives no authority to
+plan, start tickets, build or review until the user accepts the latest summary.
 
 ## Start or resume
 
 1. Run `python3 -I "<this skill's folder>/../launch-fleet/scripts/context.py" planner`
-   once per session (and again only when a blob its header lists changes). It
-   prints the public-writes card, the planner's fleet sections, the tracker's
-   where-things-live and repositories, the triage labels table, the private
-   storage rules, the roads page and the glossary's term index. Read a term's
-   definition in `GLOSSARY.md` only when you use it, and an ADR only when it
-   touches the area. The card's decision-record forms replace reading the
-   open-development contract for public decision records (saving and reading
-   back the exact words in a private comment first stays as it is); read the
-   full contract only for release, publishing, importer and ticket-mover work.
-   Verify the configured private repository's visibility and the private
-   checkout's remote before any write. Stop if you cannot verify either.
-   Keep the grill, its branch, PR, exact replies and requests there. Before
-   the first save, read [recording and recovery](references/records.md).
+   once per session (again only when a blob its header lists changes). Use what
+   it prints. Exact replies still go in a private comment first. Read a
+   `GLOSSARY.md` term only when you use it, and an ADR only in the area it
+   touches. The card's decision-record forms replace the open-development
+   contract for public decision records; read the full contract only for
+   release, publishing, importer and ticket-mover work. Verify the private
+   repository's visibility and the checkout's remote before any write. Stop
+   if either is unverified. Keep the grill, its branch, PR, exact replies and
+   requests there. Before the first save, read
+   [recording and recovery](references/records.md).
 2. From the private checkout, run `sh <skill-directory>/scripts/index.sh`. Read
    related grills and check open private PRs for unmerged files. Resume the
-   matching grill from its last saved round and pending decisions. Otherwise
+   matching grill from its last saved round, tree and pending decisions. Otherwise
    use the [file template](assets/grill.md) to create one private file, branch
    and PR. Keep the shared index untouched.
 3. For a version grill, create or reuse its named development-tracker milestone
@@ -42,57 +39,66 @@ reports low stock. Use the [ready-stock and fed-ratio rules](../../contracts/pla
 if counting from the tracker. The orchestrator can bring several grills for a
 large gap. Builder limits and approval gates still apply.
 
-## Work the frontier
+## Map, then ask
 
-Keep a design tree: each decision branches into the decisions that hang off
-it. The frontier is the open decisions whose prerequisites are settled. Before
-each round, read the saved answers, related grills and ADRs. Record anything
-you skipped as already settled, with its source.
+Run [role-call](../role-call/SKILL.md) before the first question, fleet mode
+included, and record who is present before any question.
 
-1. Ask at most three frontier questions per grill. Choose the ones that unblock
-   the most. Give each a stable ID, plain context, options and consequences,
-   and one recommendation on its own ➡️ line so “yes” accepts it. A question
-   that depends on one still open this round waits for a later round. Finding
-   facts never blocks a round: only the questions that depend on a pending
-   lookup wait.
-2. Classify and save the round's risk. Push, publish and verify the request,
-   then show the round exactly as saved. Wait for the user's reply.
-3. For a cockpit reply, match its context to the current, unanswered private
-   request before interpreting the payload. Stale, malformed or uncertain
-   context settles nothing. Apply the risk gates even when context matches.
-4. Save the exact reply before doing anything else. Record which IDs it
-   settles and which stay open, push, and read back the exact private reply
-   comment before updating answered IDs or status. A skip or an ambiguous
-   “yeah” leaves the question open.
-5. Recompute the frontier. For “simplify,” keep the ID and context and ask
-   it more plainly next round. Answer a question back before the next round
-   and save the explanation. For a conflict or fuzzy term, ask which meaning
-   or decision stands.
-6. When a reply settles a project term or a hard-to-reverse decision, follow
-   the glossary/ADR steps in [recording and recovery](references/records.md).
-   Keep public decisions in plain words with decider, date and a verified
-   private-comment pointer. Keep exact words and thread IDs private.
+Before any question, read the code, docs, tickets, glossary and ADRs the
+feature touches. Write the decision tree in the private file: every decision,
+what it depends on, and what it unblocks. Record as settled, with the source,
+anything those files already decide. Ask only what they leave open.
 
-A round is complete when the exact reply, settled/open IDs and any required
-records are saved and verified. On a cold restart, read those sources and
-continue at the first unfinished step.
+The frontier is the open decisions whose prerequisites are settled. One
+question per round, the one that unblocks the most: a stable ID, plain
+context, options, consequences, and one recommendation on its own ➡️ line so
+"yes" accepts it. A dependent of a question still open waits. Continue until
+no frontier decision remains. The install's first fleet may set a shorter
+cap; name the remainder and leave it unsettled.
 
-Before sending several grills in one message, assigning IDs alongside another
-open or parked grill, parking, or resuming a parked grill, read
-[coordination](references/coordination.md). Each grill keeps its own frontier.
+An ambiguous term gets one agreed name before reuse, including a clash with
+`GLOSSARY.md`, saved under Glossary. A question only a prototype can answer
+goes under Parked, with why, and stays undecided.
 
-## Confirm
+Post that one question as [posting](references/posting.md) describes, then
+save the round as [recording and recovery](references/records.md) describes.
+A thread reply is the answer. A skip or an ambiguous "yeah" stays open.
+"simplify" keeps the ID and context and is asked more plainly.
+On a conflict, ask which meaning stands.
+A project term or hard-to-reverse decision follows the glossary and ADR steps
+there. Recompute the frontier after the saved reply.
 
-With an empty frontier, save a summary of at most ten numbered decisions.
-Classify its risk, push, and publish and verify its confirmation request.
-Show the saved summary and ask the user to confirm it. Save the exact reply
-first. Corrections need a new saved summary and request. New decisions reopen
+Read [coordination](references/coordination.md) before several grills in one
+message, new IDs beside another grill, or parking and resuming. A parked grill
+is the user stopping. The Parked list is prototype questions.
+
+## Fleet mode
+
+With no person in the chat, and an orchestrator, ticket or spec as the
+counterpart, invent no answer. Keep what the spec, ticket, glossary, ADRs and
+code already decide. Record the rest unresolved, recommendation not settled, status open. Post
+each question for visibility; its thread settles nothing. Do not confirm or
+start [to-spec](../to-spec/SKILL.md).
+
+## Exit check
+
+Ask the next question unless every branch has a source or a saved answer,
+every term in play has one Glossary name, every prototype question is under
+Parked and undecided, and the frontier is empty.
+
+Then save a summary of at most ten numbered decisions, parked items included
+as undecided, and publish its confirmation request as recording and recovery
+describes. Post it the same way and ask whether you are aligned. Save the exact reply
+first. A correction needs a new summary and request. A new decision reopens
 the rounds.
 
-Confirm only when the user explicitly accepts the latest saved summary and
-nothing is open. Mark the file confirmed and dated, push, and resolve its
-request. Merge under the project's rules or ask the user to merge. The job
-ends at the merged private record for [to-spec](../to-spec/SKILL.md).
-Spec confirmation and plan approval remain separate, and builders and reviewers stay independent.
+Confirm only on an explicit acceptance of the latest summary with nothing
+open. The install's first fleet may accept a short summary that names an
+unasked remainder; that yes covers only that short grill. Then confirm, push,
+resolve the request, and merge by the project's rules or ask the user to
+merge. Hand the merged record to [to-spec](../to-spec/SKILL.md), which copies
+the Glossary, decision tree, Parked list and summary into the spec. Builders
+use those names and leave parked items unbuilt. Spec confirmation and plan
+approval stay separate, and builders and reviewers stay independent.
 
 Credit: adapted from Matt Pocock's skills under the MIT License; the notice and sources are in [NOTICE.md](NOTICE.md).

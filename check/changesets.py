@@ -4,10 +4,13 @@ import datetime
 import json
 import os
 import re
+import runpy
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +25,10 @@ CHANGESETS = 'node_modules/@changesets/cli/bin.js'
 IGNORED = ('AGENTS.md', 'CLAUDE.md', 'GEMINI.md')
 IGNORED_WHY = 'is a name Changesets ignores: rename it (see .changeset/README.md)'
 FIRST = '0.2.0'
+BRIEF = 'skills/launch-fleet/scripts/brief.py'
+PLUGIN = '.claude-plugin/plugin.json'
+STAMP = re.compile(r"(?m)^(WIZSKILLS_VERSION = ')([^']+)(')$")
+RELEASE_STAGE = '.wizskills-release'
 
 
 class Unusable(Exception):
@@ -92,6 +99,11 @@ def tree_skills(ref):
             if p.count('/') == 2 and p.endswith('/SKILL.md')}
 
 
+def tree_mode(ref, rel):
+    line = git('ls-tree', ref, '--', rel).splitlines()
+    return line[0].split(' ', 1)[0] if line else ''
+
+
 def blobs(ref):
     out = {}
     for line in git('ls-tree', '-z', ref, '--', '.changeset/').split('\0'):
@@ -99,6 +111,44 @@ def blobs(ref):
             meta, path = line.split('\t', 1)
             out[path] = meta.split()[2]
     return out
+
+
+def git_show(ref, rel):
+    p = subprocess.run(['git', 'show', f'{ref}:{rel}'], cwd=ROOT, capture_output=True)
+    if p.returncode:
+        return None
+    try:
+        return p.stdout.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+
+
+def plugin_version_at(ref):
+    text = git_show(ref, PLUGIN)
+    if text is None:
+        return None
+    try:
+        version = json.loads(text).get('version')
+    except (ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and PLAIN.fullmatch(version) else None
+
+
+def brief_stamp_release(merge_base):
+    old_plugin, new_plugin = plugin_version_at(merge_base), plugin_version_at('HEAD')
+    if not old_plugin or not new_plugin:
+        return False
+    if tuple(map(int, new_plugin.split('.'))) <= tuple(map(int, old_plugin.split('.'))):
+        return False
+    old_brief, new_brief = git_show(merge_base, BRIEF), git_show('HEAD', BRIEF)
+    if old_brief is None or new_brief is None:
+        return False
+    old_match, new_match = STAMP.search(old_brief), STAMP.search(new_brief)
+    if not old_match or not new_match or new_match.group(2) != new_plugin:
+        return False
+    if tree_mode(merge_base, BRIEF) != tree_mode('HEAD', BRIEF):
+        return False
+    return STAMP.sub(lambda m: m.group(1) + new_plugin + m.group(3), old_brief, count=1) == new_brief
 
 
 def check(base):
@@ -113,8 +163,12 @@ def check(base):
             continue
         name = parts[1]
         if rel == f'skills/{name}/SKILL.md' and name in head_skills and rel in before:
-            if without_version(git('show', f'{merge_base}:{rel}')) == without_version(git('show', f'HEAD:{rel}')):
+            same_text = without_version(git('show', f'{merge_base}:{rel}')) == without_version(
+                git('show', f'HEAD:{rel}'))
+            if same_text and tree_mode(merge_base, rel) == tree_mode('HEAD', rel):
                 continue
+        if rel == BRIEF and name in head_skills and rel in before and brief_stamp_release(merge_base):
+            continue
         changed.add(name)
     refusals, named = [], set()
     added = {p for p in git('diff', '--name-only', '--no-renames', '--diff-filter=A', '-z', merge_base, 'HEAD',
@@ -159,6 +213,19 @@ def skill_version(path):
     return found[0].group(1)
 
 
+def stamped_brief(version):
+    path = ROOT / BRIEF
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding='utf-8')
+    match = STAMP.search(text)
+    if match is None:
+        raise Unusable(f'{BRIEF} has no WIZSKILLS_VERSION stamp')
+    if match.group(2) == version:
+        return None
+    return path, STAMP.sub(lambda found: found.group(1) + version + found.group(3), text, count=1)
+
+
 def bumped(version, bump):
     m = PLAIN.fullmatch(version)
     if not m:
@@ -192,18 +259,113 @@ def bundle_bump(skill_bumps, explicit, added, removed):
     raise AssertionError('a pending changeset always names something')
 
 
-def bullets(changelog):
-    out, seen = [], 0
-    for line in changelog.read_text(encoding='utf-8').split('\n'):
-        if line.startswith('## '):
-            seen += 1
-            if seen > 1:
-                break
-        elif seen and line.startswith('- '):
-            out.append(line[2:].strip())
-        elif seen and line.startswith('  ') and out:
-            out[-1] += ' ' + line.strip()
-    return [' '.join(b.split()) for b in out]
+def note_section(notes, versions):
+    lines = []
+    for _name, text in notes:
+        releases, summary = parse_note(text, Anything())
+        summary = ' '.join(summary.split())
+        skills = sorted(name for name in releases if name != BUNDLE)
+        if skills:
+            listed = ', '.join(f'`{name}` {versions[name]}' for name in skills)
+            lines.append(f'- {listed}: {summary}')
+        else:
+            lines.append(f'- {summary}')
+    return lines
+
+
+def market_body(previous, version):
+    path = ROOT / '.claude-plugin/marketplace.json'
+    if not os.path.lexists(path):
+        return None, None
+    checker = runpy.run_path(str(Path(__file__).with_name('run.py')))
+    out = checker['Findings']()
+    market = checker['marketplace'](ROOT, previous, out)
+    if out:
+        return f'{out[0][1]}: {out[0][3]}', None
+    entry = market['plugins'][0]
+    if 'version' not in entry:
+        return None, None
+    entry['version'] = version
+    return None, json.dumps(market, indent=2, ensure_ascii=False) + '\n'
+
+
+def rewritten_skill(path, version):
+    lines = path.read_text(encoding='utf-8').split('\n')
+    end = lines.index('---', 1)
+    return '\n'.join(f'version: {version}' if 0 < i < end and line.startswith('version:') else line
+                     for i, line in enumerate(lines))
+
+
+@contextmanager
+def release_stage(write):
+    stage = ROOT / RELEASE_STAGE
+    pending = (f'{RELEASE_STAGE} already exists: wait for the running release. After an interruption, '
+               f'if {RELEASE_STAGE}/applying exists, restore the remaining originals from {RELEASE_STAGE}/before. '
+               f'Then remove {RELEASE_STAGE} and retry.')
+    if not write:
+        if os.path.lexists(stage):
+            raise Unusable(pending)
+        yield None
+        return
+    try:
+        stage.mkdir(mode=0o700)
+    except FileExistsError:
+        raise Unusable(pending) from None
+    except OSError as why:
+        raise Unusable(f'cannot create release staging ({why.__class__.__name__})') from why
+    try:
+        yield stage
+    finally:
+        if not (stage / 'applying').exists():
+            try:
+                shutil.rmtree(stage)
+            except OSError as why:
+                raise Unusable(f'release files are settled but {RELEASE_STAGE} could not be removed') from why
+
+
+def apply_release(pairs, stage):
+    applying = stage / 'applying'
+    staged = []
+    try:
+        for path, new in pairs:
+            mode = path.lstat().st_mode
+            if not stat.S_ISREG(mode):
+                raise OSError('release destination is not a regular file')
+            relative = path.relative_to(ROOT)
+            before = stage / 'before' / relative
+            before.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, before)
+            after = None
+            if new is not None:
+                if not (mode & 0o222 and os.access(path, os.W_OK)):
+                    raise PermissionError('release destination is not writable')
+                after = stage / 'after' / relative
+                after.parent.mkdir(parents=True, exist_ok=True)
+                after.write_text(new, encoding='utf-8')
+                after.chmod(stat.S_IMODE(mode))
+            staged.append((path, before, after))
+        applying.touch()
+    except (OSError, KeyboardInterrupt) as why:
+        raise Unusable('could not prepare release files; no release files were changed '
+                       f'({why.__class__.__name__})') from why
+    attempted = []
+    try:
+        for path, before, after in staged:
+            attempted.append((path, before))
+            if after is None:
+                path.unlink()
+            else:
+                os.replace(after, path)
+    except (OSError, KeyboardInterrupt) as why:
+        try:
+            for path, before in reversed(attempted):
+                os.replace(before, path)
+        except (OSError, KeyboardInterrupt) as rollback:
+            raise Unusable(f'release rollback could not finish ({rollback.__class__.__name__}); '
+                           f'restore the remaining originals from {RELEASE_STAGE}/before before retrying') from rollback
+        applying.unlink()
+        raise Unusable(f'a release write failed; the previous files were restored ({why.__class__.__name__})') from why
+    applying.unlink()
 
 
 def plan(names, versions, plugin_version, notes):
@@ -234,14 +396,12 @@ def plan(names, versions, plugin_version, notes):
         if left:
             raise Unusable('Changesets did not process ' + ', '.join(f'.changeset/{n}' for n in left)
                            + ': nothing written')
-        new, notes_by = {}, {}
+        new = {}
         for name, folder in packages.items():
             version = json.loads((folder / 'package.json').read_text())['version']
             if name != BUNDLE and version != versions[name]:
                 new[name] = version
-            if (folder / 'CHANGELOG.md').is_file():
-                notes_by[name] = bullets(folder / 'CHANGELOG.md')
-        return new, notes_by
+        return new
 
 
 def older_skills(path, text):
@@ -255,7 +415,7 @@ def older_skills(path, text):
     return tree_skills(commit)
 
 
-def release(since, date, write, first=False):
+def release(since, date, stage, first=False):
     names = sorted(e.name for e in (ROOT / 'skills').iterdir() if (e / 'SKILL.md').is_file())
     if BUNDLE in names:
         raise Unusable(f'a skill may not be named `{BUNDLE}`, the bundle')
@@ -309,22 +469,19 @@ def release(since, date, write, first=False):
     else:
         bump, why = bundle_bump(skill_bumps, explicit, added, removed)
         version = bumped(plugin_data['version'], bump)
-    new, notes_by = plan(names, versions, plugin_data['version'], notes)
+    new = plan(names, versions, plugin_data['version'], notes)
     if first:
         new = {}
-        shown = {n: FIRST for n in notes_by if n != BUNDLE}
-    else:
-        shown = new
+    display = {**versions, **new}
     section = [f'## {version} - {date}', '']
     section += [f'- Skills added: {", ".join(f"`{n}`" for n in added)}.'] if added else []
     section += [f'- Skills removed: {", ".join(f"`{n}`" for n in removed)}.'] if removed else []
-    section += [f'- {b}' for b in notes_by.get(BUNDLE, [])]
-    section += [f'- `{n}` {shown[n]}: {b}' for n in sorted(shown) for b in notes_by.get(n, [])]
+    section += note_section(notes, display)
     print(f'release: {BUNDLE} {plugin_data["version"]} -> {version} ({bump})')
     print(f'why: {why}')
     for n in sorted(new):
         print(f'skill {n}: {versions[n]} -> {new[n]} ({skill_bumps[n]})')
-    if not write:
+    if stage is None:
         print('dry run: nothing written')
         print('\n' + '\n'.join(section))
         return 0
@@ -333,24 +490,22 @@ def release(since, date, write, first=False):
     header = '# Changelog\n\n'
     if not changelog.startswith(header):
         raise Unusable('CHANGELOG.md does not open with `# Changelog` and a blank line')
-    for n in sorted(new):
-        path = ROOT / 'skills' / n / 'SKILL.md'
-        lines = path.read_text(encoding='utf-8').split('\n')
-        end = lines.index('---', 1)
-        lines = [f'version: {new[n]}' if 0 < i < end and l.startswith('version:') else l
-                 for i, l in enumerate(lines)]
-        path.write_text('\n'.join(lines), encoding='utf-8')
+    problem, market = market_body(plugin_data['version'], version)
+    if problem:
+        print(f'release: {problem}')
+        return 1
+    pairs = [(ROOT / 'skills' / n / 'SKILL.md', rewritten_skill(ROOT / 'skills' / n / 'SKILL.md', new[n]))
+             for n in sorted(new)]
     plugin_data['version'] = version
-    plugin_path.write_text(json.dumps(plugin_data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    market_path = ROOT / '.claude-plugin/marketplace.json'
-    if market_path.is_file():
-        market = json.loads(market_path.read_text(encoding='utf-8'))
-        if 'version' in market.get('plugins', [{}])[0]:
-            market['plugins'][0]['version'] = version
-            market_path.write_text(json.dumps(market, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
-    changelog_path.write_text(header + '\n'.join(section) + '\n\n' + changelog[len(header):], encoding='utf-8')
-    for path in note_files:
-        path.unlink()
+    pairs.append((plugin_path, json.dumps(plugin_data, indent=2, ensure_ascii=False) + '\n'))
+    brief_pair = stamped_brief(version)
+    if brief_pair is not None:
+        pairs.append(brief_pair)
+    if market is not None:
+        pairs.append((ROOT / '.claude-plugin/marketplace.json', market))
+    pairs.append((changelog_path, header + '\n'.join(section) + '\n\n' + changelog[len(header):]))
+    pairs.extend((path, None) for path in note_files)
+    apply_release(pairs, stage)
     print('\n' + '\n'.join(section))
     s, c = len(new), len(note_files)
     print(f'written: {s} skill{"s" if s != 1 else ""}, plugin.json, CHANGELOG.md; '
@@ -382,7 +537,8 @@ def main(argv):
     try:
         if args.command == 'check':
             return check(args.base)
-        return release(args.since, args.date, args.write, args.first)
+        with release_stage(args.write) as stage:
+            return release(args.since, args.date, stage, args.first)
     except Unusable as why:
         print(f'changesets: {why}', file=sys.stderr)
         return 2

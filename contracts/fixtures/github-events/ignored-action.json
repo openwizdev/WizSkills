@@ -1,0 +1,27 @@
+{
+  "closing_tickets": {},
+  "parents": {
+    "example-org/example-repo#18012": "example-org/example-repo#82"
+  },
+  "deliveries": [
+    {
+      "headers": {
+        "X-GitHub-Event": "issues",
+        "X-GitHub-Delivery": "example-ignored-action"
+      },
+      "body": {
+        "repository": {
+          "full_name": "example-org/example-repo"
+        },
+        "issue": {
+          "number": 18012
+        },
+        "action": "edited"
+      },
+      "expected": {
+        "exit_code": 0,
+        "stdout": []
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # grill: notice
 
-Adapted from Matt Pocock's `grilling` and `domain-modeling` skills (`github.com/mattpocock/skills` @ `a496f55`), which carry this notice:
+The interview is original to OpenWiz. It is inspired by Matt Pocock's `grill-me` skill, which calls his `grilling` skill (`github.com/mattpocock/skills`, `skills/productivity/grill-me` and `skills/productivity/grilling`). The recording, glossary and ADR parts are adapted from his `grilling` and `domain-modeling` skills (`github.com/mattpocock/skills` @ `a496f55`), which carry this notice:
 
 Copyright (c) 2026 Matt Pocock
 

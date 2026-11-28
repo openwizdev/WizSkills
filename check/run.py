@@ -90,6 +90,7 @@ SUITES = {
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-stop-all.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-route.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-budget.py'],
+                     ['python3', '-I', 'skills/launch-fleet/scripts/test-quota.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-overload.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-snapshot.py'],
                      ['python3', '-I', 'skills/launch-fleet/scripts/test-gitread.py'],

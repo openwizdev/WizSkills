@@ -343,6 +343,29 @@ class Fleet(unittest.TestCase):
         self.assertNotRegex(out, r'\bthr_[A-Za-z0-9]')
         self.assertNotIn('tell its builder', out)
 
+    def test_retried_builder_ignores_archived_quota_errored_thread(self):
+        self.issue(12)['comments'] = [
+            dict(id=1201, at='2026-11-01T10:00:00Z',
+                 body='launch-fleet: start not tried: quota, resets 2026-11-01T11:30:00Z'),
+            dict(id=1202, at='2026-11-01T11:35:00Z', body='launch-fleet: started'),
+        ]
+        self.threads = [
+            dict(id='thr_synquota', title='#12: Synthetic', branch=None, archivedAt='2026-11-01T10:01:00Z'),
+            dict(id='thr_synretry', title='#12: Synthetic', branch='room/12-retry', archivedAt=None),
+            dict(id=THREAD, title='Review #31 at ' + SHA[:8], branch=None, archivedAt=None),
+        ]
+        path = self.dir / 'state.json'
+        path.write_text(json.dumps({'repo': self.world['repo'], 'threads': {'builder:12': 'thr_synretry'}}))
+        self.env['LAUNCH_FLEET_STATE'] = str(path)
+        for cli in ('local', 'cloud'):
+            with self.subTest(cli=cli):
+                self.env['FAKE_ROOM_CLI'] = cli
+                out = self.run_fleet('wake', '12')
+                self.assertNotIn('two threads match builder:12', out)
+                self.assertIn(f'review #31 for #12 at {SHA}:', out)
+        self.threads.append(dict(id='thr_synsecondlive', title='#12: Synthetic', branch=None, archivedAt=None))
+        self.assertIn('look #12: two threads match builder:12', self.run_fleet('wake', '12'))
+
     def test_private_map_and_discovery_disagreement_is_a_look(self):
         self.pr['checks'][0]['conclusion'] = 'FAILURE'
         path = self.dir / 'state.json'

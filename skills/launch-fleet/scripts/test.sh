@@ -35,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 FLEET=${FLEET_SH:-$HERE/fleet.sh}
 FIX=$HERE/fixtures
 NOW=1793534400 # 2026-11-01T12:00:00Z, the fixtures' "now"
-CASES=1066
+CASES=1079
 fails=0
 cases=0
 ERR=''         # the exact stderr the next case expects, when not the points line
@@ -3972,6 +3972,87 @@ EOF
 expect 'one probe per batch: the frontier leaves out a start not tried' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: #13 was refused: model catalog unavailable")' -- frontier <<EOF
 #13 W3: widget page
 EOF
+expect 'quota reset: start not tried with future reset waits past 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z")' -- check < /dev/null
+expect 'quota reset: start not tried retries at the reset even within 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T12:00:00Z") | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T12:00:00Z")' -- check <<EOF
+start #13: W3: widget page (spec #10; retry after "start not tried: quota, resets 2026-11-01T12:00:00Z")
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-11-01T12:00:00Z")
+EOF
+expect 'quota reset: claim withdraws naming the reset time while waiting' 0 check.json "$BATCH"' | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z") | say(70; 7004; "11:58"; "launch-fleet: starting")' -- claim 70 7004 <<EOF
+withdraw #70: its start waits for quota reset at 2026-11-01T13:30:00Z
+EOF
+expect 'quota reset: frontier leaves out a ticket waiting for quota reset' 0 check.json "$BATCH"' | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T13:30:00Z")' -- frontier <<EOF
+#13 W3: widget page
+EOF
+expect 'quota reset: start not tried without reset time falls back to 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota")' -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota")
+EOF
+expect 'quota reset: malformed reset timestamp falls back to 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-99-99T99:99:99Z")' -- check <<EOF
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-99-99T99:99:99Z")
+EOF
+expect 'quota reset: a record posted after its reset waits 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- check < /dev/null
+expect 'quota reset: a record posted after its reset retries after 10 minutes' 0 check.json "$BATCH"' | say(13; 1301; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7003; "11:45"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- check <<EOF
+start #13: W3: widget page (spec #10; retry after "start not tried: quota, resets 2026-11-01T11:00:00Z")
+start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-11-01T11:00:00Z")
+EOF
+expect 'quota reset: claim after a passed reset uses the 10 minute wait' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z") | say(70; 7004; "11:58"; "launch-fleet: starting")' -- claim 70 7004 <<EOF
+withdraw #70: its start was refused less than 10 minutes ago
+EOF
+expect 'quota reset: frontier leaves out a ticket inside the 10 minutes after a passed reset' 0 check.json "$BATCH"' | say(70; 7003; "11:55"; "launch-fleet: start not tried: quota, resets 2026-11-01T11:00:00Z")' -- frontier <<EOF
+#13 W3: widget page
+EOF
+
+late_quota_case() {
+  name='quota reset: a later builder reports back after its starting wake ends'
+  selected "$name" && take || return 0
+  cases=$((cases + 1))
+  d=$tmp/late-quota
+  mkdir -p "$d/bin" && cp "$tmp/bin/gh" "$d/bin/gh" \
+    && printf '%s\n' '{"repo":"synthetic-owner/synthetic-repo","threads":{"builder:70":"thr_syn70"}}' > "$d/routes.json" \
+    && world check.json "$BATCH"' | .private = false
+      | say(13; 1301; "11:10"; "launch-fleet: start checked, branch room/13-probe")
+      | say(70; 7003; "11:11"; "launch-fleet: started")' "$d" > "$d/world.json" \
+    || { bad "$name" "fixture setup failed"; return; }
+  cat > "$d/bin/room-cli" <<'ROOM'
+#!/bin/sh
+case "$*" in
+  'thread list --include-archived --include-hidden --json') exit 2 ;;
+  'thread list --include-archived --json') printf '%s\n' '{"children":[]}' ;;
+  'thread archive thr_syn70 --json')
+    [ -n "${ARCHIVE_STATE:-}" ] || exit 1
+    printf '{"id":"thr_syn70","state":"%s"}\n' "$ARCHIVE_STATE" ;;
+  *) exit 1 ;;
+esac
+ROOM
+  chmod +x "$d/bin/room-cli" || { bad "$name" "fixture CLI setup failed"; return; }
+  quota_wake() {
+    env PATH="$d/bin:$PATH" GH_REPO=synthetic-owner/synthetic-repo OPENWIZ_STATE_DIR="$d/no-installation" \
+      FAKE_GH_WORLD="$d/world.json" FAKE_GH_LOG="$d/gh-$2.log" LAUNCH_FLEET_STATE="$d/routes.json" LAUNCH_FLEET_NOW="$1" \
+      LAUNCH_FLEET_CACHE="$d/cache-$2" LAUNCH_FLEET_REVISION="$FIX/revision.sh" /bin/sh "$FLEET" wake 70
+  }
+  out=$(quota_wake "$NOW" fresh 2> "$d/err") && points_only "$d/err" \
+    && [ "$out" = 'check start #70: thread thr_syn70, no branch 30 minutes after the start; verify the outcome with its starter' ] \
+    || { bad "$name" "fresh wake should ask the starter: $out $(cat "$d/err")"; return; }
+  error_at=$((NOW - 1800))
+  quota_report() {
+    printf '%s\n' 'Individual quota reached. Try again in 45m.' | \
+      env PATH="$d/bin:$PATH" ARCHIVE_STATE="$1" LAUNCH_FLEET_NOW="$NOW" \
+      "$PYTHON" -I "$HERE/quota.py" retire thr_syn70 --now "$error_at"
+  }
+  record=$(quota_report queued 2> "$d/err")
+  [ "$?" = 2 ] && [ -z "$record" ] || { bad "$name" "a queued archive allowed a retry record"; return; }
+  record=$(quota_report archived 2> "$d/err")
+  [ "$?" = 1 ] && [ "$record" = 'launch-fleet: start not tried: quota, resets 2026-11-01T12:15:00Z' ] \
+    || { bad "$name" "the parent did not record the reset from the error time: $record"; return; }
+  jq --arg record "$record" "$LIB edit(70; 7003; \"12:00\"; \$record)" "$d/world.json" > "$d/next.json" \
+    && mv "$d/next.json" "$d/world.json" || { bad "$name" "fixture record edit failed"; return; }
+  out=$(quota_wake "$((NOW + 899))" before 2> "$d/err") && points_only "$d/err" && [ -z "$out" ] \
+    || { bad "$name" "a fresh wake before the reset must be quiet: $out"; return; }
+  out=$(quota_wake "$((NOW + 900))" reset 2> "$d/err") && points_only "$d/err" \
+    && [ "$out" = 'start #70: Fix the broken link in the widget docs (approved on its own; retry after "start not tried: quota, resets 2026-11-01T12:15:00Z")' ] \
+    || { bad "$name" "a fresh wake at the reset must retry only the later builder: $out"; return; }
+  echo "ok   $name"
+}
+late_quota_case
 
 ### Token cuts (#694) in the skill: no superseded base-moved text, ticks end,
 ### re-checks carry their delta, one probe per batch, keyed scope blockers
@@ -4004,6 +4085,8 @@ if take; then
   # The re-check message's ids, both heads and delta: test-brief.py's re-check case (WS8).
   skill_has 'skill: one probe per batch, by assignment' 'start that group'"'"'s first claim alone, the probe'
   skill_has 'skill: the start not tried record' '`start not tried: <why>`'
+  skill_has 'skill: first-turn quota error records start not tried: quota' 'start not tried: quota'
+  skill_has 'skill: quota check helper' 'scripts/quota.py'
   skill_has 'skill: a scope blocker is raised once per key' '`look #N: blocked on scope <key>: ...`'
 fi
 

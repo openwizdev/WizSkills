@@ -46,12 +46,14 @@ class Repo(unittest.TestCase):
     def build(self, case):
         self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
+        self.git('config', 'core.checkStat', 'minimal')
         for nth, side in enumerate(('base', 'head')):
             for old in self.repo.iterdir():
                 if old.name != '.git':
                     shutil.rmtree(old) if old.is_dir() else old.unlink()
             shutil.copytree(FIXTURES / case / side, self.repo, dirs_exist_ok=True)
             self.stamp(1_800_000_000 + nth)
+            self.git('rm', '-r', '-q', '--cached', '--ignore-unmatch', '.')
             self.git('add', '-A')
             self.git('add', '-u', '--renormalize')
             self.git('commit', '-q', '-m', side)

@@ -18,13 +18,18 @@ owns.
 
 A ticket that adds a **driver**, a **harness row**, a **skill** or a **loop**
 also owns its market listing. Owned paths gets
-`` `listings/<id>.json` in `openwizdev/WizMarket` ``. The builder opens that
-listing in its own pull request on WizMarket as soon as the ticket starts:
-`stage: being-built`, `status: listed`, and the first link is this ticket,
-under `contracts/listing.v1.md` there. Acceptance criteria gets one line: the
-listing is merged, and when the work ships its listing's `stage` is moved to
-`available` (and its `status` to `verified` once its kit receipt or pinned
-check exists).
+`` `listings/<id>.json` in `openwizdev/WizMarket` ``. At ticket start, the
+builder opens a non-closing companion PR in WizMarket with
+`stage: being-built`, `status: listed`, and the ticket as the first listing
+link, following `contracts/listing.v1.md` there. Use a plain ticket URL in the
+companion PR body. Reserve GitHub closing links and keywords (including in
+commits) for the implementation PR. Ask WizMarket maintainers to review the
+companion PR and merge it once its checks pass. Add one acceptance criterion
+requiring the companion PR to merge before the implementation ships and the
+listing to move to `stage: available` when it ships. Keep `status: listed`
+unless its tags support `verified` and all required proof passes (a kit
+receipt for `driver` or `harness`, a pinned passing check for `skill`, both
+when both apply).
 
 `**Relies on:**` lists exact backticked interface-file paths on one line,
 or `nothing`. Use `## Done by` for a person's ticket. Proof names the spec

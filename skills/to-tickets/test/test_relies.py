@@ -274,5 +274,45 @@ class PlannedReliesTest(unittest.TestCase):
                 self.assertTrue(out.stdout.startswith('**Machine plan approval, '), out.stdout[:80])
 
 
+SKILL = Path(__file__).resolve().parents[1] / 'SKILL.md'
+TICKETS = Path(__file__).resolve().parents[1] / 'tickets.md'
+
+
+def between(text, start, end):
+    at = text.index(start)
+    return text[at + len(start):text.index(end, at)]
+
+
+def flat(text):
+    return ' '.join(text.split())
+
+
+class HandoffInstructionTest(unittest.TestCase):
+    def test_ready_labels_follow_a_fresh_revision_and_only_liftable_holds(self):
+        text = SKILL.read_text(encoding='utf-8')
+        step = text.split('## 4. Approve by the checks', 1)[1].split('\n## 5.', 1)[0]
+        after = flat(step.split('compare it byte for byte', 1)[1])
+        rerun = after.find('re-run `revision.sh`')
+        compare = after.find('compare it with the record\'s revision')
+        mismatch = after.find('On a mismatch, apply nothing and lift nothing.')
+        limited = after.find('only for a hold this approval may lift')
+        independent = after.find('An independent hold stays unready')
+        apply = after.find('apply that row\'s ready label')
+        self.assertNotEqual(rerun, -1, 'ready labels follow the posted record without a fresh revision.sh')
+        self.assertLess(rerun, compare)
+        self.assertLess(compare, mismatch)
+        self.assertLess(mismatch, apply)
+        self.assertLess(apply, limited)
+        self.assertLess(limited, independent)
+
+    def test_planned_path_needs_a_direct_blocker_in_the_one_repository(self):
+        page = TICKETS.read_text(encoding='utf-8')
+        para = flat(between(page, '`--planned`', 'check-links.sh'))
+        self.assertIn('direct blocker in the dependent ticket\'s repository', para)
+        self.assertIn('exact file or a containing folder or pattern', para)
+        self.assertIn('no single repository', para)
+        self.assertIn('do not pass `--planned`', para)
+
+
 if __name__ == '__main__':
     unittest.main()

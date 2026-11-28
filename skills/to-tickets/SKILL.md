@@ -35,9 +35,7 @@ handoff it would authorize.
 ## 2. Cut the tickets
 
 Cut end-to-end builder tickets to an expected diff of about 200 changed lines
-and 10 files or fewer, judged from first-pass review results on comparable work:
-that range is `Size: S.` (this revises openwizdev/OpenWiz#2484's RR2, which set
-about 400). An M is about 400. Size M is allowed only with a
+and 10 files or fewer: that range is `Size: S.`, and an M is about 400. Size M is allowed only with a
 `Why M: <reason it can't split>` line in Parent. A ticket of size L is split,
 never cut. For a spec created on or after approve.py's `SIZES_SINCE`, step 4
 refuses an L, and an M without that line. Cut for the shortest critical chain,
@@ -47,9 +45,7 @@ cuts, write each as picture data and run
 `python3 -I "<this skill's folder>/scripts/prefer.py" <cut A> <cut B>`: it keeps
 the shorter critical chain, and the wider graph when the chains are equal.
 Use a contract-first ticket for a shared interface, or say why none is needed.
-Ask yourself the owner's old questions: is each ticket the right size, is each
-arrow right, what should merge or split. The checks in
-step 4 hold you to them. See [the ticket and graph inputs](tickets.md).
+Step 4 checks the size, the arrows and any merge or split. See [the ticket and graph inputs](tickets.md).
 
 ## 3. Write and verify the tickets
 
@@ -81,8 +77,11 @@ approval's revision plus one with `--changed`.
 
 Post `record.md` with `gh issue comment <spec> --body-file record.md` as a
 record author, read it back and compare it byte for byte. On an uncertain write,
-read the comments before retrying. Only then apply each row's ready label (the
-project's label for that role) and read the labels back.
+read the comments before retrying. Before a ready label, re-run `revision.sh`
+and compare it with the record's revision. On a mismatch, apply nothing and
+lift nothing. Lift `held` and apply that row's ready label only for a hold this
+approval may lift. An independent hold stays unready (`held` on, ready off).
+Read the labels back. A re-cut uses this same limit.
 
 ## 5. Hand off
 
@@ -90,7 +89,7 @@ project's label for that role) and read the labels back.
 approval. Hand back to to-spec for the steering video. Builders and
 other-family reviewers stay independent, and the fleet owns exact-head checks
 and merge. The plan's outcome is the spec's lead time, from the spec's creation
-to its last ticket's merge, for the war room:
+to its last ticket's merge:
 `python3 -I "<this skill's folder>/scripts/lead_time.py" <collector JSON> --spec <spec>`
 reads the collector's `flow` fact and keeps unknown unknown. Every rule in
 `fleet.md`'s Approval rules asks its named approver first; with no such section,

@@ -2,7 +2,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd) || exit 1
 INDEX=${INDEX_SH:-$HERE/index.sh}
-CASES=30
+CASES=31
 fails=0
 cases=0
 
@@ -171,6 +171,12 @@ expect_default default-absent 0 '' 'index.sh: this project has no docs/grills fo
 mkdir -p "$tmp/p/docs/grills" || { echo "FAIL setup"; exit 1; }
 printf '%s\n\n%s\n' '# Grill: alpha (2026-01-02)' "$P Status: **open**. Feeds: the alpha spec." > "$tmp/p/docs/grills/2026-01-02-alpha.md"
 expect_default default-present 0 "$HEAD
+| [alpha](2026-01-02-alpha.md) | **open** | the alpha spec |"
+
+fresh
+grill 2026-01-02-alpha.md '# Grill: alpha (2026-01-02)' "$P Status: **open**. Feeds: the alpha spec."
+printf '\n## Decision tree\n\n- G1 depends on nothing.\n\n## Glossary\n\n- Draft: the private file.\n\n## Parked\n\n- none\n' >> "$tmp/g/2026-01-02-alpha.md"
+expect sections 0 "$HEAD
 | [alpha](2026-01-02-alpha.md) | **open** | the alpha spec |"
 
 if [ "$cases" -ne "$CASES" ]; then

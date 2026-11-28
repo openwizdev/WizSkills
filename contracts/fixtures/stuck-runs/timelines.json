@@ -1,0 +1,188 @@
+{
+  "contract": "openwiz.stuck-runs.v1",
+  "run": {
+    "id": "run-syn-builder",
+    "repo": "example/factory",
+    "ticket": 42,
+    "pull_request": 43,
+    "author": "synthetic-builder",
+    "branch": "work/42",
+    "status_note": 1001,
+    "skill": "build-ticket",
+    "harness": "codex",
+    "model": "synthetic-model",
+    "active": true,
+    "started_at": "2030-01-02T12:00:00Z"
+  },
+  "cases": [
+    {
+      "name": "recent-note-edit",
+      "now": "2030-01-02T12:40:00Z",
+      "records": [
+        {"kind": "status_edit", "at": "2030-01-02T12:25:00Z", "note": 1001}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "recent-push",
+      "now": "2030-01-02T12:40:00Z",
+      "records": [
+        {"kind": "push", "at": "2030-01-02T12:25:00Z", "branch": "work/42"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "recent-ticket-comment",
+      "now": "2030-01-02T12:40:00Z",
+      "records": [
+        {"kind": "comment", "at": "2030-01-02T12:25:00Z", "on": "ticket", "number": 42, "author": "synthetic-builder"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "recent-pr-comment",
+      "now": "2030-01-02T12:40:00Z",
+      "records": [
+        {"kind": "comment", "at": "2030-01-02T12:25:00Z", "on": "pull_request", "number": 43, "author": "synthetic-builder"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "unrelated-activity",
+      "now": "2030-01-02T12:30:00Z",
+      "records": [
+        {"kind": "status_edit", "at": "2030-01-02T12:25:00Z", "note": 1002},
+        {"kind": "push", "at": "2030-01-02T12:26:00Z", "branch": "work/99"},
+        {"kind": "comment", "at": "2030-01-02T12:27:00Z", "on": "ticket", "number": 42, "author": "synthetic-reviewer"},
+        {"kind": "comment", "at": "2030-01-02T12:28:00Z", "on": "pull_request", "number": 99, "author": "synthetic-builder"},
+        {"kind": "host_log", "at": "2030-01-02T12:29:00Z"}
+      ],
+      "expected": "nudge"
+    },
+    {
+      "name": "inactive",
+      "now": "2030-01-02T12:50:00Z",
+      "active": false,
+      "records": [],
+      "expected": "none"
+    },
+    {
+      "name": "before-stuck-threshold",
+      "now": "2030-01-02T12:29:59Z",
+      "records": [],
+      "expected": "none"
+    },
+    {
+      "name": "limit-wait",
+      "now": "2030-01-02T12:45:00Z",
+      "records": [
+        {"kind": "limit_wait", "at": "2030-01-02T12:29:00Z", "reset_at": "2030-01-02T13:00:00Z"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "limit-reset",
+      "now": "2030-01-02T13:00:00Z",
+      "records": [
+        {"kind": "limit_wait", "at": "2030-01-02T12:29:00Z", "reset_at": "2030-01-02T13:00:00Z"}
+      ],
+      "expected": "nudge"
+    },
+    {
+      "name": "nudge-grace",
+      "now": "2030-01-02T12:49:59Z",
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:30:00Z", "text": "launch-fleet: nudged #42 after 30 minutes without progress"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "restart-at-threshold",
+      "now": "2030-01-02T12:50:00Z",
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:30:00Z", "text": "launch-fleet: nudged #42 after 30 minutes without progress"}
+      ],
+      "expected": "restart"
+    },
+    {
+      "name": "progress-ends-spell",
+      "now": "2030-01-02T13:05:00Z",
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:30:00Z", "text": "launch-fleet: nudged #42 after 30 minutes without progress"},
+        {"kind": "status_edit", "at": "2030-01-02T12:35:00Z", "note": 1001}
+      ],
+      "expected": "nudge"
+    },
+    {
+      "name": "daily-cap",
+      "now": "2030-01-02T12:30:00Z",
+      "records": [
+        {"kind": "restarted", "at": "2030-01-02T08:00:00Z", "text": "launch-fleet: restarted #42 from its records"},
+        {"kind": "restarted", "at": "2030-01-02T10:00:00Z", "text": "launch-fleet: restarted #42 from its records"}
+      ],
+      "expected": "look"
+    },
+    {
+      "name": "look-already-recorded",
+      "now": "2030-01-02T13:30:00Z",
+      "records": [
+        {"kind": "restarted", "at": "2030-01-02T08:00:00Z", "text": "launch-fleet: restarted #42 from its records"},
+        {"kind": "restarted", "at": "2030-01-02T10:00:00Z", "text": "launch-fleet: restarted #42 from its records"},
+        {"kind": "look", "at": "2030-01-02T12:30:00Z", "text": "launch-fleet: look #42: stuck after 2 restarts"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "previous-utc-day",
+      "now": "2030-01-02T12:30:00Z",
+      "records": [
+        {"kind": "restarted", "at": "2030-01-01T21:00:00Z", "text": "launch-fleet: restarted #42 from its records"},
+        {"kind": "restarted", "at": "2030-01-01T23:59:00Z", "text": "launch-fleet: restarted #42 from its records"}
+      ],
+      "expected": "nudge"
+    },
+    {
+      "name": "custom-stuck",
+      "now": "2030-01-02T12:10:00Z",
+      "settings": {"stuck_minutes": 10, "restart_minutes": 240},
+      "records": [],
+      "expected": "nudge"
+    },
+    {
+      "name": "custom-restart-wait",
+      "now": "2030-01-02T16:09:59Z",
+      "settings": {"stuck_minutes": 10, "restart_minutes": 240},
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:10:00Z", "text": "launch-fleet: nudged #42 after 10 minutes without progress"}
+      ],
+      "expected": "none"
+    },
+    {
+      "name": "custom-restart-due",
+      "now": "2030-01-02T16:10:00Z",
+      "settings": {"stuck_minutes": 10, "restart_minutes": 240},
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:10:00Z", "text": "launch-fleet: nudged #42 after 10 minutes without progress"}
+      ],
+      "expected": "restart"
+    },
+    {
+      "name": "too-short",
+      "now": "2030-01-02T16:30:00Z",
+      "settings": {"stuck_minutes": 9},
+      "refusal": "invalid-settings",
+      "records": [],
+      "expected": "none"
+    },
+    {
+      "name": "too-long",
+      "now": "2030-01-02T16:30:00Z",
+      "settings": {"restart_minutes": 241},
+      "refusal": "invalid-settings",
+      "records": [
+        {"kind": "nudged", "at": "2030-01-02T12:30:00Z", "text": "launch-fleet: nudged #42 after 30 minutes without progress"}
+      ],
+      "expected": "none"
+    }
+  ]
+}

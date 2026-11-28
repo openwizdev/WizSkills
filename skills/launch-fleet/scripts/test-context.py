@@ -42,7 +42,7 @@ class ContextTests(unittest.TestCase):
     def test_role_sections_and_sources(self):
         builder = ['Supporting edits', 'Test commands', 'Approval rules']
         reviewer = ['Supporting edits', 'Test commands', 'CI checks', 'Approval rules']
-        planner = ['Labels', 'Supporting edits', 'Approval rules']
+        planner = ['Labels', 'Supporting edits']
         fleet = ['Models', 'CI checks', 'Labels', 'Other', 'Approval rules']
         legacy = ['Builder', 'Builder for small tickets', 'Reviewer for Claude-built',
                   'Reviewer for GPT-built', 'Fixer']
@@ -70,9 +70,9 @@ class ContextTests(unittest.TestCase):
                               (host, '# Host\n\nSynthetic host.')]),
             ('planner', planner, [(tracker, section('Where things live').strip() + '\n\n'
                                     + section('Repositories').strip()),
-                                   (LABELS, TABLE.strip()), (domain, section('Private storage').strip()),
+                                   (domain, section('Private storage').strip()),
                                    (roads, '# Roads\n\nSynthetic roads.'),
-                                   ('GLOSSARY.md', 'Cherry, Pear\n\n' + glossary)]),
+                                   ('GLOSSARY.md', glossary)]),
         ]
         for role, sections, extras in cases:
             with self.subTest(role=role):
@@ -101,6 +101,78 @@ class ContextTests(unittest.TestCase):
                 glossary,
             ]) + '\n')
             self.assertEqual((result.returncode, result.stderr), (0, ''))
+
+    def test_compacts_fleet_source_paragraphs_for_reviewer_and_fleet(self):
+        self.put(CARD, '# Public writes\n\nSynthetic card.\n')
+        self.put(FLEET, '\n\n'.join([
+            '## Models\n\nModel rule.\n\n'
+            'Source: Synthetic author, 2030-01-01 ([private record](https://github.com/example/private/issues/1#issuecomment-100)); '
+            'also ([private record](https://github.com/example/private/issues/2#issuecomment-200)).\n\n'
+            'Keep this trailing rule.',
+            '## Supporting edits\n\nSupporting rule. '
+            'Source: Synthetic author, 2030-01-02 ([private record](https://github.com/example/private/issues/3#issuecomment-300)).',
+            '## Test commands\n\n```sh\nSource: keep inside fence\n```\n\n'
+            'Source: [AGENTS.md](../../AGENTS.md).',
+            '## CI checks\n\nDraft rule. Source: [ci.yml](../../.github/workflows/ci.yml).',
+            '## Approval rules\n\nApproval table.\n\n'
+            'Source: provenance ([private record](https://github.com/example/private/issues/4#issuecomment-400)).',
+            '## Standing merge rules\n\nMerge rule.\n\n'
+            'Source: provenance ([private record](https://github.com/example/private/issues/5#issuecomment-500)); [ADR](adr.md).',
+        ]) + '\n')
+        reviewer = self.run_cli('reviewer')
+        self.assertEqual((reviewer.returncode, reviewer.stderr), (0, ''))
+        self.assertIn('Model rule.\n\nKeep this trailing rule.\n\n'
+                      'Source: https://github.com/example/private/issues/1#issuecomment-100, '
+                      'https://github.com/example/private/issues/2#issuecomment-200', reviewer.stdout)
+        self.assertIn('## Supporting edits\n\nSupporting rule.\n\n'
+                      'Source: https://github.com/example/private/issues/3#issuecomment-300', reviewer.stdout)
+        self.assertIn('Source: keep inside fence', reviewer.stdout)
+        self.assertNotIn('[AGENTS.md]', reviewer.stdout)
+        self.assertIn('## CI checks\n\nDraft rule.\n\n## Approval rules', reviewer.stdout)
+        self.assertIn('## Approval rules\n\nApproval table.\n\n'
+                      'Source: https://github.com/example/private/issues/4#issuecomment-400', reviewer.stdout)
+        self.assertNotIn('Synthetic author', reviewer.stdout)
+        fleet = self.run_cli('fleet')
+        self.assertEqual((fleet.returncode, fleet.stderr), (0, ''))
+        self.assertIn('## Standing merge rules\n\nMerge rule.\n\n'
+                      'Source: https://github.com/example/private/issues/5#issuecomment-500', fleet.stdout)
+        self.assertNotIn('provenance', fleet.stdout)
+        self.assertNotIn('Synthetic author', fleet.stdout)
+
+    def test_keeps_ci_rule_sharing_a_source_line_for_reviewer_and_fleet(self):
+        clause = 'no bypass, no force-push, no branch deletion'
+        self.put(CARD, '# Public writes\n\nSynthetic card.\n')
+        self.put(FLEET, (
+            '## CI checks\n\n'
+            'A draft fails the plan and `ci`; marking it ready starts a full run. '
+            'Source: [the workflow](../../.github/workflows/ci.yml) and the repository ruleset '
+            f'"CI must pass": {clause}.\n'
+        ))
+        for role in ('reviewer', 'fleet'):
+            with self.subTest(role=role):
+                result = self.run_cli(role)
+                self.assertEqual((result.returncode, result.stderr), (0, ''))
+                self.assertIn(clause, result.stdout)
+
+    def test_keeps_approval_rows_and_linked_rules_alongside_sources(self):
+        row = ('| Read the release policy. Source: [policy](https://example.com/policy) '
+               '| Release lead |')
+        rule = '[Release approval](https://example.com/approval) is required before publishing.'
+        standalone = 'Source: [Use the release checklist before publishing](https://example.com/checklist).'
+        pointer = 'https://github.com/example/private/issues/1#issuecomment-100'
+        self.put(FLEET, (
+            '## Approval rules\n\n| Rule | Approver |\n| --- | --- |\n'
+            f'{row}\n\n'
+            f'Source: Synthetic author, 2030-01-01 ([private record]({pointer})). {rule}\n\n'
+            f'{standalone}\n'
+        ))
+        for role in ('reviewer', 'fleet'):
+            result = self.run_cli(role)
+            self.assertEqual((result.returncode, result.stderr), (0, ''))
+            for kept in (row, rule, standalone, f'Source: {pointer}'):
+                with self.subTest(role=role, kept=kept):
+                    self.assertIn(kept, result.stdout)
+            self.assertNotIn('Synthetic author', result.stdout)
 
     def test_missing_sources_and_legacy_only_settings(self):
         missing = self.run_cli('builder')

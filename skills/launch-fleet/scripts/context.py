@@ -16,7 +16,7 @@ WORDS = ('Use the words in `GLOSSARY.md`; read it when you name something new, '
 ROLE_SECTIONS = {
     'builder': ('Supporting edits', 'Test commands', 'Approval rules'),
     'reviewer': ('Supporting edits', 'Test commands', 'CI checks', 'Approval rules'),
-    'planner': ('Labels', 'Supporting edits', 'Approval rules'),
+    'planner': ('Labels', 'Supporting edits'),
 }
 LEGACY_REVIEWER_MODELS = ('Reviewer for Claude-built', 'Reviewer for GPT-built')
 OPTIONAL_LEGACY_REVIEWER_MODELS = ('Reviewer for Gemini-built',)
@@ -50,6 +50,89 @@ def sections(text):
     return {name: ''.join(lines).strip() for name, lines in result.items()}
 
 
+_MARKDOWN_LINK = re.compile(r'\[[^\]]*\]\([^)]*\)')
+_PRIVATE_RECORD = re.compile(r'\[private record\]\((https://[^)\s]+)\)')
+_CITATION_LINK = re.compile(
+    r'\[(?:AGENTS\.md(?:, Commands|, Live work and approvals)?'
+    r'|ci\.yml|the CI workflow|ADR(?: \d+)?)\]\([^)]*\)'
+)
+_SOURCE = re.compile(r'(?:^|(?<=[.!?])[ \t]+)Source:[ \t]+(.*)$')
+_DATE = r'\d{4}-\d{2}-\d{2}'
+_RECORDS = r'\((?:(?:J\d+|ADR \d+|spec #\d+|' + _DATE + r')(?:: [^()]*)?; )?@record(?:; @record)*\)'
+_CITATION = re.compile(
+    rf'(?:@link(?:(?:,?(?: and)?|;) @link)*'
+    rf'|(?:[A-Z][A-Za-z -]*, {_DATE}(?:(?:,| and) {_DATE})*|provenance) {_RECORDS}'
+    rf'(?:; (?:also|the Fixer as J\d+) {_RECORDS})*'
+    r'(?:; the Orchestrator as the Builder, which starts the fleet thread today)?'
+    r'(?:; (?:release rules in )?@link)?'
+    r'|the first six rows are the fleet\'s action gates; the next three are the "Jake approves first" '
+    r'list in @link; the last two are @link)\.?'
+)
+_CI_SOURCE = re.compile(
+    r'\[the workflow\]\([^)]*\) and the repository ruleset "CI must pass":[ \t]+'
+)
+
+
+def source_sentences(text):
+    masked = _MARKDOWN_LINK.sub(lambda link: 'x' * len(link[0]), text)
+    start = 0
+    for end in re.finditer(r'(?<=\.)[ \t]+', masked):
+        yield text[start:end.start()]
+        start = end.end()
+    yield text[start:]
+
+
+def split_source(text):
+    match = _CI_SOURCE.match(text)
+    if match:
+        return text[match.end():], []
+    kept = []
+    links = []
+    shortened = False
+    for sentence in source_sentences(text):
+        form = _PRIVATE_RECORD.sub('@record', sentence)
+        form = _CITATION_LINK.sub('@link', form)
+        if _CITATION.fullmatch(form):
+            links.extend(_PRIVATE_RECORD.findall(sentence))
+            shortened = True
+        else:
+            kept.append(sentence)
+    return (' '.join(kept), links) if shortened else (None, [])
+
+
+def compact_sources(text):
+    out = []
+    links = []
+    fence = ''
+    for line in text.splitlines():
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
+        if marker:
+            run, tail = marker.groups()
+            if not fence:
+                fence = run
+            elif run.startswith(fence) and not tail.strip():
+                fence = ''
+        if not fence and '|' not in line:
+            match = _SOURCE.search(line)
+            if match:
+                instruction, records = split_source(match[1])
+                if instruction is not None:
+                    links.extend(records)
+                    prefix = line[:match.start()].rstrip()
+                    kept = ' '.join(part for part in (prefix, instruction) if part)
+                    if kept:
+                        out.append(kept)
+                    continue
+        if line == '' and (not out or out[-1] == ''):
+            continue
+        out.append(line)
+    body = '\n'.join(out).strip()
+    if links:
+        source = 'Source: ' + ', '.join(dict.fromkeys(links))
+        body = f'{body}\n\n{source}' if body else source
+    return body
+
+
 def selected_sections(path, text, names, role):
     found = sections(text)
     if names is None:
@@ -63,13 +146,10 @@ def selected_sections(path, text, names, role):
             *(name for name in OPTIONAL_LEGACY_REVIEWER_MODELS if name in found),
         )
         names = (*model_sections, *names)
-    return [found.get(name, f'No `{name}` section in `{path}`.') for name in names]
-
-
-def labels_table(text):
-    labels = sections(text).get('Labels', '')
-    match = re.search(r'^ *\|[^\n]+\n *\|[ |:\-]+(?:\n *\|[^\n]+)*', labels, re.M)
-    return match[0] if match else 'No Labels table in `docs/agents/triage-labels.md`.'
+    picked = [found.get(name, f'No `{name}` section in `{path}`.') for name in names]
+    if path == FLEET and role in ('reviewer', 'fleet'):
+        return [compact_sources(item) for item in picked]
+    return picked
 
 
 def read_optional(path):
@@ -89,12 +169,11 @@ def print_role(role, root):
         sources += [(AGENTS + 'triage-labels.md', None), (AGENTS + 'host.md', None)]
     if role == 'planner':
         sources += [(AGENTS + 'issue-tracker.md', ('Where things live', 'Repositories')),
-                    (AGENTS + 'triage-labels.md', None),
                     (AGENTS + 'domain.md', ('Private storage',)), (AGENTS + 'roads.md', None)]
     if role != 'fleet':
         sources.append((GLOSSARY, None))
     for path, names in sources:
-        if path == GLOSSARY and role != 'planner':
+        if path == GLOSSARY:
             text = '' if (root / path).is_file() else None
         else:
             text = read_optional(root / path)
@@ -107,13 +186,7 @@ def print_role(role, root):
         blob = git(root, 'rev-parse', '--verify', f'{head}:{path}') if head else ''
         blobs.append(f'{path} {blob or "untracked"}')
         if path == GLOSSARY:
-            if role == 'planner':
-                terms = re.findall(r'^\*\*([^*\n]+)\*\*:', text, re.M)
-                if terms:
-                    parts.append(', '.join(terms))
             parts.append(WORDS)
-        elif role == 'planner' and path == AGENTS + 'triage-labels.md':
-            parts.append(labels_table(text))
         elif path == FLEET or names is not None:
             parts.extend(selected_sections(path, text, names, role))
         else:

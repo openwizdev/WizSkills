@@ -40,8 +40,10 @@ LOGIN = r'`[A-Za-z0-9](?:-?[A-Za-z0-9])*(?:\[bot\])?`'
 CELL = re.compile(r'\s*%s(?:\s*,\s*%s)*\s*' % (LOGIN, LOGIN))
 MODELS_HEADER = ['Role', 'Harness', 'Model', 'Effort', '`room-cli thread spawn` flags']
 MODEL_ROWS = ('Orchestrator', 'Builder', 'Reviewer', 'Small builder', 'Fixer')
+FALL_BACK = 'Reviewer fall-back'
 ID = r'[A-Za-z0-9._-]+'
 FLAGS_CELL = re.compile(r'`--provider (%s) --model (%s(?:/%s)*) --reasoning-level (%s)`' % (ID, ID, ID, ID))
+NO_MODEL_CELL = re.compile(r'`--provider (?!--)(%s) --reasoning-level (?!--)(%s)`' % (ID, ID))
 ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
@@ -58,7 +60,8 @@ def read(path, problems):
         problems.append('%s: not a regular file' % path.name)
         return None
     try:
-        return path.read_text(encoding='utf-8')
+        with open(path, encoding='utf-8', newline='') as handle:
+            return handle.read()
     except (OSError, UnicodeError):
         problems.append('%s: unreadable' % path.name)
         return None
@@ -82,13 +85,17 @@ def cells(line):
     return [cell.strip() for cell in line.strip()[1:-1].split('|')] if line.strip().endswith('|') else None
 
 
-def models(text):
-    lines = text.split('\n')
+def models(text, fall_backs=False):
+    # DATA LOSS: install's choose rewrites a table this accepts to five rows, so fall-back rows need the opt-in.
+    # Launch-fleet reads each line whole, less one carriage return, so the check trims no more.
+    lines = [line[:-1] if fall_backs and line.endswith('\r') else line for line in text.split('\n')]
     headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
     if not headings:
         return None
     if len(headings) > 1:
         raise ValueError(['more than one ## Models heading'])
+    if fall_backs and lines[headings[0]] != '## Models':
+        raise ValueError(['the heading is not exactly ## Models'])
     rows = []
     for line in lines[headings[0] + 1:]:
         if line.startswith('## '):
@@ -97,16 +104,24 @@ def models(text):
             rows.append(line)
         elif rows:
             break
+    if fall_backs and not all(row.endswith('|') for row in rows):
+        raise ValueError(['a table row does not end at its closing |'])
     if len(rows) < 2 or cells(rows[0]) != MODELS_HEADER or cells(rows[1]) != ['---'] * 5:
         raise ValueError(["the header is not the contract's"])
     body = [cells(row) for row in rows[2:]]
     names = [row[0] if row and len(row) == 5 else None for row in body]
+    at = next((n for n, name in enumerate(names) if name and name.startswith(FALL_BACK)), len(names))
+    if fall_backs and at < len(names):
+        if at < 3 or names[at:] != ['%s %d' % (FALL_BACK, n) for n in range(1, len(names) - at + 1)]:
+            raise ValueError(['fall-back rows not %s 1, 2 and so on, in order, after every other row' % FALL_BACK])
+        names = names[:at]
     if names[:3] != list(MODEL_ROWS[:3]) or names[3:] not in ([], ['Small builder'], ['Fixer'],
                                                              ['Small builder', 'Fixer']):
         raise ValueError(['rows not Orchestrator, Builder, Reviewer, then optional Small builder, Fixer'])
     found, broken = {}, []
     for role, harness, model, effort, flags in body:
         match = FLAGS_CELL.fullmatch(flags)
+        bare = NO_MODEL_CELL.fullmatch(flags) if fall_backs and role != MODEL_ROWS[0] else None
         if harness == 'follows Builder':
             found[role] = None
             if role not in MODEL_ROWS[3:]:
@@ -117,10 +132,10 @@ def models(text):
             broken.append('%s: unfilled' % role)
         elif not (harness and model and effort):
             broken.append('%s: Harness, Model and Effort need names' % role)
-        elif not match:
+        elif not (match or bare):
             broken.append('%s: the flags are not one exact `--provider --model --reasoning-level`' % role)
         else:
-            found[role] = match.groups()
+            found[role] = match.groups() if match else (bare.group(1), None, bare.group(2))
     if broken:
         raise ValueError(broken)
     return found
@@ -257,10 +272,10 @@ def fixer(body, problems):
             problems.append('fleet.md: Fixer: %s: malformed %s' % (family, flags))
 
 
-def fleet(text, problems):
+def fleet(text, problems, raw=None):
     found, exact = sections(text), sections(text, exact=True)
     try:
-        table = models(text)
+        table = models(text if raw is None else raw, fall_backs=True)
     except ValueError as error:
         problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
         table = False
@@ -593,9 +608,10 @@ def main(argv):
             return 2
     folder = Path(got.get('--root', '.')) / 'docs/agents'
     problems = []
-    texts = {name: read(folder / name, problems) for name in FILES}
+    raw = {name: read(folder / name, problems) for name in FILES}
+    texts = {name: text and text.replace('\r\n', '\n').replace('\r', '\n') for name, text in raw.items()}
     if texts['fleet.md'] is not None:
-        fleet(texts['fleet.md'], problems)
+        fleet(texts['fleet.md'], problems, raw['fleet.md'])
     if texts['triage-labels.md'] is not None:
         triage(texts['triage-labels.md'], labels, problems)
     for line in problems:

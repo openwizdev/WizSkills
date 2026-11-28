@@ -1055,9 +1055,16 @@ class Session(unittest.TestCase):
         self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the queue', process)
         time.sleep(0.5)
         self.change(lambda w: w['prs']['12'].update(queued=False))
-        self.until(lambda: [m[0] for m in self.merges()].count('merge') == 2, 'the merge sent again', process)
-        process.send_signal(signal.SIGINT)
-        self.ended(process, 130)
+        self.until(lambda: json.loads(self.world.read_text())['prs']['12'].get('queued'), 'the re-queue', process)
+
+        def land(w):
+            w['prs']['12']['state'] = 'MERGED'
+            for number in ('5', '6'):
+                w['tickets'][number]['state'] = 'CLOSED'
+
+        self.change(land)
+        self.ended(process, 0)
+        self.assertEqual([m[0] for m in self.merges() if m[0] != 'read'], ['admit', 'merge'] * 2)
 
     def supplier(self, fails=False, waiting=0, log=None):
         path = self.home / 'supply.py'

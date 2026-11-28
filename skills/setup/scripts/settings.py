@@ -60,7 +60,8 @@ def read(path, problems):
         problems.append('%s: not a regular file' % path.name)
         return None
     try:
-        return path.read_text(encoding='utf-8')
+        with open(path, encoding='utf-8', newline='') as handle:
+            return handle.read()
     except (OSError, UnicodeError):
         problems.append('%s: unreadable' % path.name)
         return None
@@ -86,12 +87,15 @@ def cells(line):
 
 def models(text, fall_backs=False):
     # DATA LOSS: install's choose rewrites a table this accepts to five rows, so fall-back rows need the opt-in.
-    lines = text.split('\n')
+    # Launch-fleet reads each line whole, less one carriage return, so the check trims no more.
+    lines = [line[:-1] if fall_backs and line.endswith('\r') else line for line in text.split('\n')]
     headings = [n for n, line in enumerate(lines) if line.startswith('## ') and line[3:].strip() == 'Models']
     if not headings:
         return None
     if len(headings) > 1:
         raise ValueError(['more than one ## Models heading'])
+    if fall_backs and lines[headings[0]] != '## Models':
+        raise ValueError(['the heading is not exactly ## Models'])
     rows = []
     for line in lines[headings[0] + 1:]:
         if line.startswith('## '):
@@ -100,6 +104,8 @@ def models(text, fall_backs=False):
             rows.append(line)
         elif rows:
             break
+    if fall_backs and not all(row.endswith('|') for row in rows):
+        raise ValueError(['a table row does not end at its closing |'])
     if len(rows) < 2 or cells(rows[0]) != MODELS_HEADER or cells(rows[1]) != ['---'] * 5:
         raise ValueError(["the header is not the contract's"])
     body = [cells(row) for row in rows[2:]]
@@ -115,7 +121,7 @@ def models(text, fall_backs=False):
     found, broken = {}, []
     for role, harness, model, effort, flags in body:
         match = FLAGS_CELL.fullmatch(flags)
-        bare = NO_MODEL_CELL.fullmatch(flags) if fall_backs else None
+        bare = NO_MODEL_CELL.fullmatch(flags) if fall_backs and role != MODEL_ROWS[0] else None
         if harness == 'follows Builder':
             found[role] = None
             if role not in MODEL_ROWS[3:]:
@@ -266,10 +272,10 @@ def fixer(body, problems):
             problems.append('fleet.md: Fixer: %s: malformed %s' % (family, flags))
 
 
-def fleet(text, problems):
+def fleet(text, problems, raw=None):
     found, exact = sections(text), sections(text, exact=True)
     try:
-        table = models(text, fall_backs=True)
+        table = models(text if raw is None else raw, fall_backs=True)
     except ValueError as error:
         problems.extend('fleet.md: Models: %s' % line for line in error.args[0])
         table = False
@@ -602,9 +608,10 @@ def main(argv):
             return 2
     folder = Path(got.get('--root', '.')) / 'docs/agents'
     problems = []
-    texts = {name: read(folder / name, problems) for name in FILES}
+    raw = {name: read(folder / name, problems) for name in FILES}
+    texts = {name: text and text.replace('\r\n', '\n').replace('\r', '\n') for name, text in raw.items()}
     if texts['fleet.md'] is not None:
-        fleet(texts['fleet.md'], problems)
+        fleet(texts['fleet.md'], problems, raw['fleet.md'])
     if texts['triage-labels.md'] is not None:
         triage(texts['triage-labels.md'], labels, problems)
     for line in problems:

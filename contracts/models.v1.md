@@ -54,6 +54,10 @@ table; the section's first table is the Models table and must be exactly:
 
 - **Header:** the five column names above, in that order, then `| --- |` for
   each. Cells are read trimmed of spaces.
+- **Line ends:** the heading line is exactly `## Models`, and every line of
+  the table ends at its closing `|`: no space, tab or other character
+  follows either, but the line's end (one carriage return before it is
+  read as part of the end).
 - **Rows,** in this order: Orchestrator, Builder and Reviewer, all three
   required; then optionally Small builder, then optionally Fixer; then
   optionally the fall-back rows, `Reviewer fall-back 1`,
@@ -63,8 +67,10 @@ table; the section's first table is the Models table and must be exactly:
   flags cell is one code span, exactly
   `--provider <id> --model <model id> --reasoning-level <id>` with single
   spaces, or, for a harness that takes no model (such as Antigravity),
-  `--provider <id> --reasoning-level <id>`. Any choice row may leave
-  `--model` out; readers don't know which harnesses take none. The Model
+  `--provider <id> --reasoning-level <id>`. Any choice row but the
+  Orchestrator's may leave `--model` out; readers don't know which
+  harnesses take none. The Orchestrator's row always has its `--model`:
+  the fleet's loop is set to that row's provider, model and effort. The Model
   cell still names the model people read. The flags are what spawns;
   the names are what people read. Readers take both as written.
 - **A fall-back row** is a choice row; it never follows, and it changes
@@ -436,6 +442,9 @@ their model. Nothing restarts.
 - Install's first-fleet reader still refuses a table with a fall-back row or
   a choice with no `--model`, because its `choose` rewrites the table to five
   rows with a model each.
+- Launch-fleet's reader still takes an Orchestrator row with no `--model`,
+  and its loop check then has no model id to write; the setup check refuses
+  that row, so a checked project never reaches it.
 - The setup check also refuses an id starting with `--` in flags with no
   `--model`, which the ids rule allows, so a flag is never read as a value.
 - No live read is in this contract: the snapshot is only as fresh as its

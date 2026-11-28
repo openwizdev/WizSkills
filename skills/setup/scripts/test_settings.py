@@ -468,8 +468,6 @@ class Check(unittest.TestCase):
                 self.assertEqual((code, out.splitlines()), (5, [line, 'Settings: refused (1 problems).']))
 
     def test_a_models_table_the_launch_reader_refuses_for_its_line_ends_is_refused(self):
-        # catches: setup trimming a row or the heading that launch-fleet reads whole, so a
-        # verified table stops every fleet start (review of #403, first finding).
         starts = reader(SKILLS / 'launch-fleet/scripts/ops-starts.py')
         follows = '| Fixer | follows Builder | | | |\n'
         first, builder = no_model('Reviewer fall-back 1'), choice('Builder', 'claude-code', 'syn-claude-1')
@@ -502,8 +500,6 @@ class Check(unittest.TestCase):
         self.assertEqual(self.check(self.project(**{'fleet.md': ended})), (0, 'Settings: verified (4 files).\n'))
 
     def test_an_orchestrator_row_needs_its_model(self):
-        # catches: a verified Orchestrator with no --model, whose loop update then
-        # carries no model id (review of #403, second finding).
         orchestrator = choice('Orchestrator', 'claude-code', 'syn-claude-1')
         follows = '| Fixer | follows Builder | | | |\n'
         line = 'fleet.md: Models: Orchestrator: the flags are not one exact `--provider --model --reasoning-level`'

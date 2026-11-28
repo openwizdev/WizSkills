@@ -1,0 +1,121 @@
+{
+  "schema": "openwiz.state-model.v1",
+  "machine": "toy route",
+  "sources": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "files": [
+      "synthetic/toy-machine.txt"
+    ]
+  },
+  "variables": {
+    "phase": {
+      "type": "enum",
+      "values": [
+        "ready",
+        "loop",
+        "done"
+      ]
+    }
+  },
+  "init": {
+    "phase": "ready"
+  },
+  "actions": [
+    {
+      "name": "divert",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "ready"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "loop"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "name": "finish",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "ready"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "done"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    },
+    {
+      "name": "circle",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "loop"
+        ]
+      },
+      "effect": [],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    }
+  ],
+  "invariants": {
+    "intact": true
+  },
+  "bound": 10,
+  "progress": {
+    "can-finish": {
+      "op": "eq",
+      "args": [
+        {
+          "var": "phase"
+        },
+        "done"
+      ]
+    }
+  },
+  "final": {
+    "op": "eq",
+    "args": [
+      {
+        "var": "phase"
+      },
+      "done"
+    ]
+  }
+}

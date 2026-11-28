@@ -110,6 +110,7 @@ ROSTER_HEADER = ['Name', 'Kind', 'Driver', 'Roles', 'Writes as']
 KINDS = ('harness', 'host', 'bot')
 ROSTER_ROLES = ('orchestrator', 'builder', 'reviewer', 'helper')
 SKILL_ROLES = {'build-ticket': 'builder', 'review-ticket': 'reviewer', 'launch-fleet': 'orchestrator'}
+NO_ROSTER_REQUESTERS = {'review-ticket': 'reviewer', 'launch-fleet': 'fleet'}
 HARNESS_NAMES = {'claude-code': 'Claude Code', 'codex': 'Codex'}
 ENTRY = re.compile(r'(?=.{1,40}$)[A-Za-z0-9](?:[A-Za-z0-9._-]| (?! ))*(?<=[A-Za-z0-9])')
 LOGIN = re.compile(r'[A-Za-z0-9]+(-[A-Za-z0-9]+)*')
@@ -677,6 +678,37 @@ def load(repo):
     return value
 
 
+def requesters_path():
+    return Path(str(runs_path()) + '.requesters')
+
+
+def requesters(repo):
+    path = requesters_path()
+    try:
+        value = strict(path.read_text())
+    except FileNotFoundError:
+        return {'repo': repo, 'requesters': {}}
+    except (OSError, UnicodeDecodeError) as e:
+        raise Unreadable('%s is unreadable: %s' % (path, e))
+    if not (isinstance(value, dict) and set(value) == {'repo', 'requesters'} and value['repo'] == repo
+            and isinstance(value['requesters'], dict)
+            and all(TICKET.fullmatch(k) and isinstance(v, dict) and set(v) == {'host', 'requester', 'run'}
+                    and v['requester'] in ['%s-%s' % (label, k) for label in NO_ROSTER_REQUESTERS.values()]
+                    and isinstance(v['host'], str) and NAME.fullmatch(v['host'])
+                    and isinstance(v['run'], str) and RUN.fullmatch(v['run'])
+                    for k, v in value['requesters'].items())):
+        raise Unreadable('%s is not a requesters file for %s' % (path, repo))
+    return value
+
+
+def save(path, value):
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.runs-')
+    with os.fdopen(fd, 'w') as f:
+        json.dump(value, f, sort_keys=True)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
 def ready(repo):
     """Before a driver runs: the runs file's folder is writable and its lock opens, so a start can be saved."""
     path = runs_path()
@@ -690,7 +722,7 @@ def ready(repo):
     load(repo)
 
 
-def record(repo, change):
+def record(repo, change, label=None):
     """Under the runs file's lock, re-read it, apply change(runs) and save it owner-only, read back.
 
     False when the save or its read-back failed. Starts at once each keep their run."""
@@ -700,12 +732,11 @@ def record(repo, change):
             fcntl.flock(lock, fcntl.LOCK_EX)
             value = load(repo)
             change(value['runs'])
-            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.runs-')
-            with os.fdopen(fd, 'w') as f:
-                json.dump(value, f, sort_keys=True)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, path)
-            return load(repo) == value
+            side = requesters(repo) if label else None
+            if label and label(side['requesters']):
+                save(requesters_path(), side)
+            save(path, value)
+            return load(repo) == value and (side is None or requesters(repo) == side)
     except (OSError, Unreadable):
         return False
 
@@ -741,7 +772,12 @@ def main(argv):
             taking, picked, effort = roster_start(text, entries, repo, n, argv[3], argv[4], skill, row)
     elif run:
         taking = run.get('role')
-    requester = '%s-%s' % (taking or 'builder', n)
+    if kind == 'start':
+        requester = '%s-%s' % (taking or NO_ROSTER_REQUESTERS.get(skill, 'builder'), n)
+    else:
+        saved = requesters(repo)['requesters'].get(n)
+        same = run and saved and [saved['host'], saved['run']] == [run['host'], run['run']]
+        requester = saved['requester'] if same else '%s-%s' % (taking or 'builder', n)
     if configured() and kind != 'start':
         DRIVER_ENV = builder_env(repo, n, requester)
     live = 'refused: #%s already has a run on %s; wake or stop it instead'
@@ -766,7 +802,13 @@ def main(argv):
             if runs.get(n) != run:  # another start saved a run for #N meanwhile
                 raise Outcome('unknown: #%s got a second run, %s on %s; stop one of them' % (n, new, host))
             runs[n] = dict({'host': host, 'run': new}, **({'role': taking} if picked else {}))
-        if not record(repo, add):
+
+        def label(saved):
+            old = saved.pop(n, None)
+            if requester != 'builder-%s' % n and not picked:
+                saved[n] = {'host': host, 'requester': requester, 'run': new}
+            return saved.get(n) != old
+        if not record(repo, add, label):
             raise Outcome('unknown: #%s started on %s but its run was not saved; save run %s on host %s for #%s '
                           'privately before anything else' % (n, host, new, host, n))
         print('started #%s on %s%s' % (n, host, ' as %s, %s' % (

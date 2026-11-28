@@ -1,0 +1,130 @@
+{
+  "files": {
+    "outside.txt": "Synthetic file outside the served tree.\n",
+    "skills/syn-alpha/SKILL.md": "---\nname: syn-alpha\ndescription: Synthetic alpha skill.\n---\n# Alpha\n\nRead the synthetic notes.\n",
+    "skills/syn-alpha/reference/notes.txt": "Synthetic alpha notes.\n",
+    "skills/syn-beta/SKILL.md": "---\nname: syn-beta\ndescription: Synthetic beta skill.\n---\n# Beta\n",
+    "skills/syn-beta/read me.md": "Synthetic beta resource.\n"
+  },
+  "binaryFiles": {"skills/syn-alpha/picture.bin": [0, 255]},
+  "links": {"skills/syn-alpha/outside-link.txt": "../../outside.txt"},
+  "start": [
+    {
+      "send": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "syn-client", "version": "1"}
+      }},
+      "reply": {"jsonrpc": "2.0", "id": 1, "result": {
+        "protocolVersion": "2025-11-25", "capabilities": {"prompts": {}, "resources": {}},
+        "serverInfo": {"name": "wizskills", "version": "1"}
+      }}
+    },
+    {"send": {"jsonrpc": "2.0", "method": "notifications/initialized"}, "reply": null}
+  ],
+  "cases": [
+    {
+      "name": "protocol-negotiation", "fresh": true,
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {
+          "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "syn-client", "version": "1"}
+        }},
+        "reply": {"jsonrpc": "2.0", "id": 2, "result": {
+          "protocolVersion": "2025-11-25", "capabilities": {"prompts": {}, "resources": {}},
+          "serverInfo": {"name": "wizskills", "version": "1"}
+        }}
+      }]
+    },
+    {
+      "name": "prompts-list",
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": 3, "method": "prompts/list"},
+        "reply": {"jsonrpc": "2.0", "id": 3, "result": {"prompts": [
+          {"name": "syn-alpha", "description": "Synthetic alpha skill."},
+          {"name": "syn-beta", "description": "Synthetic beta skill."}
+        ]}}
+      }]
+    },
+    {
+      "name": "prompts-get-body",
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": "prompt", "method": "prompts/get", "params": {"name": "syn-alpha"}},
+        "reply": {"jsonrpc": "2.0", "id": "prompt", "result": {
+          "description": "Synthetic alpha skill.",
+          "messages": [{"role": "user", "content": {"type": "text", "text": "# Alpha\n\nRead the synthetic notes.\n"}}]
+        }}
+      }]
+    },
+    {
+      "name": "prompts-get-unknown",
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": 5, "method": "prompts/get", "params": {"name": "syn-absent"}},
+        "reply": {"jsonrpc": "2.0", "id": 5, "error": {"code": -32602, "message": "Invalid params"}}
+      }]
+    },
+    {
+      "name": "resources-list-text-only",
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": 6, "method": "resources/list"},
+        "reply": {"jsonrpc": "2.0", "id": 6, "result": {"resources": [
+          {"uri": "wizskills://syn-alpha/SKILL.md", "name": "SKILL.md", "mimeType": "text/plain"},
+          {"uri": "wizskills://syn-alpha/reference/notes.txt", "name": "reference/notes.txt", "mimeType": "text/plain"},
+          {"uri": "wizskills://syn-beta/SKILL.md", "name": "SKILL.md", "mimeType": "text/plain"},
+          {"uri": "wizskills://syn-beta/read%20me.md", "name": "read me.md", "mimeType": "text/plain"}
+        ]}}
+      }]
+    },
+    {
+      "name": "resources-read-escaped-path",
+      "steps": [{
+        "send": {"jsonrpc": "2.0", "id": 7, "method": "resources/read", "params": {"uri": "wizskills://syn-beta/read%20me.md"}},
+        "reply": {"jsonrpc": "2.0", "id": 7, "result": {"contents": [
+          {"uri": "wizskills://syn-beta/read%20me.md", "mimeType": "text/plain", "text": "Synthetic beta resource.\n"}
+        ]}}
+      }]
+    },
+    {
+      "name": "resources-refuse-unlisted-files",
+      "steps": [
+        {
+          "send": {"jsonrpc": "2.0", "id": 8, "method": "resources/read", "params": {"uri": "wizskills://syn-alpha/outside-link.txt"}},
+          "reply": {"jsonrpc": "2.0", "id": 8, "error": {"code": -32002, "message": "Resource not found"}}
+        },
+        {
+          "send": {"jsonrpc": "2.0", "id": 9, "method": "resources/read", "params": {"uri": "wizskills://syn-alpha/picture.bin"}},
+          "reply": {"jsonrpc": "2.0", "id": 9, "error": {"code": -32002, "message": "Resource not found"}}
+        }
+      ]
+    },
+    {
+      "name": "tools-and-unknown-method",
+      "steps": [
+        {
+          "send": {"jsonrpc": "2.0", "id": 10, "method": "tools/list"},
+          "reply": {"jsonrpc": "2.0", "id": 10, "error": {"code": -32601, "message": "Method not found"}}
+        },
+        {
+          "send": {"jsonrpc": "2.0", "id": 11, "method": "ping"},
+          "reply": {"jsonrpc": "2.0", "id": 11, "error": {"code": -32601, "message": "Method not found"}}
+        }
+      ]
+    },
+    {
+      "name": "malformed-then-valid",
+      "steps": [
+        {
+          "line": "{",
+          "reply": {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}
+        },
+        {
+          "line": "[]",
+          "reply": {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request"}}
+        },
+        {
+          "send": {"jsonrpc": "2.0", "id": 12, "method": "resources/read", "params": {"uri": "wizskills://syn-alpha/reference/notes.txt"}},
+          "reply": {"jsonrpc": "2.0", "id": 12, "result": {"contents": [
+            {"uri": "wizskills://syn-alpha/reference/notes.txt", "mimeType": "text/plain", "text": "Synthetic alpha notes.\n"}
+          ]}}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "openwiz.state-model.v1",
+  "machine": "toy lever",
+  "sources": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "files": [
+      "synthetic/toy-machine.txt"
+    ]
+  },
+  "variables": {
+    "phase": {
+      "type": "enum",
+      "values": [
+        "ready",
+        "jammed"
+      ]
+    }
+  },
+  "init": {
+    "phase": "ready"
+  },
+  "actions": [
+    {
+      "name": "jam",
+      "guard": {
+        "op": "eq",
+        "args": [
+          {
+            "var": "phase"
+          },
+          "ready"
+        ]
+      },
+      "effect": [
+        {
+          "op": "assign",
+          "var": "phase",
+          "value": "jammed"
+        }
+      ],
+      "cites": [
+        {
+          "file": "synthetic/toy-machine.txt",
+          "start": 1,
+          "end": 2
+        }
+      ]
+    }
+  ],
+  "invariants": {
+    "intact": true
+  },
+  "bound": 10
+}

@@ -1090,9 +1090,9 @@ class Session(unittest.TestCase):
         self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
         self.assertEqual(self.merges(), [])
         self.assertEqual(self.probes(), 0)
-        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 3)
-        self.assertIn('did not admit a merge batch: paused: unknown (observation_unknown)', out)
-        self.assertEqual(self.merges(), [])
+        out = self.ended(self.session(LAUNCH_FLEET_OVERLOAD_SUPPLY=self.supplier()), 0)
+        self.assertIn('#12 merged', out)
+        self.assertEqual(self.probes(), 0)
 
     def test_with_a_healthy_supplier_the_session_makes_no_probe_of_its_own(self):
         self.approved()

@@ -518,6 +518,22 @@ class SkillCommandsMatchPackage(unittest.TestCase):
                 for code in __import__('re').findall(r'`(cloudroom_[a-z_]+)`', line.split(' | ')[0])}
         self.assertEqual(sorted(set(json.loads(PACKAGE.read_text())['cloudroom_codes']) - rows), [])
 
+    def test_preflight_matches_the_installer_targets(self):
+        import re
+        text = SKILL.read_text()
+        preflight = text[text.index('## 1. Preflight'):text.index('## 2. Verified install')]
+        supported = preflight.split('Supported: ', 1)[1].split('. ', 1)[0]
+        with self.subTest('supported targets'):
+            self.assertCountEqual(re.findall(r'`([a-z0-9_]+-[a-z0-9_-]+)`', supported), [
+                'aarch64-apple-darwin', 'x86_64-apple-darwin',
+                'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+            ])
+        with self.subTest('unsupported targets'):
+            self.assertIn('Preflight refuses 32-bit ARM and musl Linux.', preflight)
+        self.assertIn('On Linux the build needs glibc 2.34 or later (`ldd --version`).', preflight)
+        self.assertIn('Linux on ARM before `0.1.1`', preflight)
+        self.assertNotIn('Linux on ARM is refused', preflight)
+
     def test_removal_names_each_entry_and_never_deletes_a_folder_whole(self):
         text = SKILL.read_text()
         removal = text[text.index('## Recovery and removal'):]

@@ -70,6 +70,7 @@ if [ "${1:-}" = --bundle ]; then
   [ $# = 2 ] || spec_number "$3" || die "FLEET_SPEC must be a spec's number"
   source=$(cd -P "$(dirname "$0")/../.." && pwd) || die "can't find the installed skills"
   files='launch-fleet/scripts/loop.sh launch-fleet/scripts/fleet.sh launch-fleet/scripts/records.py launch-fleet/scripts/budget.py to-tickets/revision.sh to-tickets/check-links.sh launch-fleet/scripts/carried/alarm.py launch-fleet/scripts/github-app/agent-token.py setup/scripts/settings.py'
+  [ -r "$source/launch-fleet/scripts/overload-supply.py" ] && files="$files launch-fleet/scripts/overload-supply.py"
   for file in $files; do
     [ -r "$source/$file" ] || die "can't read installed $file"
     # The quoted heredoc must preserve every byte, without interpreting shell
@@ -108,8 +109,168 @@ repository "$GH_REPO" || die "GH_REPO must be owner/name"
 FLEET_SPEC=${FLEET_SPEC:-}
 [ -z "$FLEET_SPEC" ] || spec_number "$FLEET_SPEC" || die "FLEET_SPEC must be a spec's number"
 export GH_REPO
+token_step() {
+  step_py='
+import hmac, json, os, pathlib, re, secrets, stat, sys
+
+def open_private(create):
+    raw = os.environ.get("OPENWIZ_AGENT_TOKEN_DIR") or ""
+    if not raw:
+        runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+        raw = (os.path.join(runtime, "openwiz-agent-token") if runtime.startswith("/")
+               else os.path.join(str(pathlib.Path.home()), ".cache", "openwiz-agent-token"))
+    if not os.path.isabs(raw):
+        return None, None
+    path = os.path.normpath(raw)
+    me = os.getuid()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in [p for p in path.split("/") if p]:
+            try:
+                os.stat(".git", dir_fd=fd, follow_symlinks=False)
+                return None, None
+            except FileNotFoundError:
+                pass
+            above = os.fstat(fd)
+            if above.st_uid not in (0, me) or ((above.st_mode & 0o022) and not (above.st_mode & stat.S_ISVTX)):
+                return None, None
+            try:
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    return None, None
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            if os.fstat(fd).st_uid not in (0, me):
+                return None, None
+        try:
+            os.stat(".git", dir_fd=fd, follow_symlinks=False)
+            return None, None
+        except FileNotFoundError:
+            pass
+        info = os.fstat(fd)
+        if info.st_uid != me or (info.st_mode & 0o077):
+            return None, None
+        out, fd = fd, -1
+        return out, path
+    except OSError:
+        return None, None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+def no_repeats(pairs):
+    if len({k for k, _ in pairs}) != len(pairs):
+        raise ValueError("repeated key")
+    return dict(pairs)
+
+mode = sys.argv[1]
+if mode == "verify":
+    if not os.environ.get("OPENWIZ_TOKEN_SERVICE"):
+        sys.exit(1)
+    loop_pid, loop_ppid = int(sys.argv[2]), int(sys.argv[3])
+    if loop_pid != os.getppid():
+        sys.exit(1)
+    m = re.fullmatch(r"([0-9a-f]{32}):([0-9a-f]{64})", os.environ.get("LAUNCH_FLEET_TOKEN_STEP", ""))
+    if not m:
+        sys.exit(1)
+    step_id, nonce = m.groups()
+    fd, priv = open_private(False)
+    if fd is None:
+        sys.exit(1)
+    name = f"step-{step_id}.json"
+    try:
+        try:
+            sfd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            sys.exit(1)
+        with os.fdopen(sfd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or (info.st_mode & 0o077):
+                sys.exit(1)
+            raw = handle.read(4096)
+        try:
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=no_repeats)
+        except (UnicodeDecodeError, ValueError):
+            sys.exit(1)
+        if (not isinstance(data, dict) or set(data) != {"pid", "nonce", "repo"}
+                or type(data["pid"]) is not int
+                or not isinstance(data["nonce"], str)
+                or not isinstance(data["repo"], str)
+                or not hmac.compare_digest(data["nonce"], nonce)):
+            sys.exit(1)
+        try:
+            os.unlink(name, dir_fd=fd)
+        except OSError:
+            sys.exit(1)
+        if data["repo"] != os.environ.get("GH_REPO"):
+            sys.exit(1)
+        run_mark = os.environ.get("OPENWIZ_AGENT_TOKEN_RUN", "")
+        if run_mark:
+            rname = os.path.basename(run_mark)
+            if (data["pid"] != loop_ppid
+                    or os.path.dirname(run_mark) != priv
+                    or not re.fullmatch(r"run-[0-9a-f]{32}\.json", rname)):
+                sys.exit(1)
+            try:
+                rfd = os.open(rname, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError:
+                sys.exit(1)
+            try:
+                rinfo = os.fstat(rfd)
+                if not stat.S_ISREG(rinfo.st_mode) or rinfo.st_uid != os.getuid() or (rinfo.st_mode & 0o077):
+                    sys.exit(1)
+            finally:
+                os.close(rfd)
+        elif data["pid"] != loop_pid:
+            sys.exit(1)
+        sys.exit(0)
+    finally:
+        os.close(fd)
+elif mode == "launch":
+    helper, repo, script = sys.argv[2], sys.argv[3], sys.argv[4]
+    fd, _ = open_private(True)
+    if fd is None:
+        sys.exit(2)
+    step_id, nonce = secrets.token_hex(16), secrets.token_hex(32)
+    name = f"step-{step_id}.json"
+    try:
+        sfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        with os.fdopen(sfd, "w") as handle:
+            json.dump({"pid": os.getpid(), "nonce": nonce, "repo": repo}, handle)
+    except OSError:
+        os.close(fd)
+        sys.exit(2)
+    os.close(fd)
+    env = dict(os.environ)
+    env["LAUNCH_FLEET_TOKEN_STEP"] = f"{step_id}:{nonce}"
+    try:
+        os.execve(sys.executable, [sys.executable, "-I", helper, "run", "--requester", "fleet-check", "--repository", repo, "--read", "--", "sh", script], env)
+    except OSError:
+        fd2, _ = open_private(False)
+        if fd2 is not None:
+            try:
+                os.unlink(name, dir_fd=fd2)
+            except OSError:
+                pass
+            os.close(fd2)
+        sys.exit(2)
+'
+  if [ "$1" = launch ]; then
+    exec python3 -I -c "$step_py" "$@"
+  fi
+  python3 -I -c "$step_py" "$@"
+}
 inside=
-case ${LAUNCH_FLEET_TOKEN_STEP:-} in "$$" | "$PPID") inside=1 ;; esac
+if [ -n "${LAUNCH_FLEET_TOKEN_STEP+set}" ] && token_step verify "$$" "$PPID"; then
+  inside=1
+fi
 unset LAUNCH_FLEET_TOKEN_STEP
 app_identity() {
   restore_today_account || return 1
@@ -120,7 +281,7 @@ app_identity() {
 }
 identity_off=
 if [ -n "$inside" ]; then
-  identity_off=1
+  :
 elif [ -z "${OPENWIZ_TOKEN_SERVICE:-}" ]; then
   if [ -n "$app_key_set" ]; then identity_off=1; fi
 elif ! app_identity; then
@@ -128,11 +289,9 @@ elif ! app_identity; then
 fi
 if [ -n "${OPENWIZ_TOKEN_SERVICE:-}" ] && [ -z "$inside" ] && [ -z "$identity_off" ]; then
   helper=$(cd -P "$(dirname "$0")" && pwd)/github-app/agent-token.py
-  LAUNCH_FLEET_TOKEN_STEP=$$
-  export LAUNCH_FLEET_TOKEN_STEP
-  exec python3 -I "$helper" run --requester fleet-check --repository "$GH_REPO" --read -- sh "$0"
+  token_step launch "$helper" "$GH_REPO" "$0"
 fi
-if [ -n "$identity_off" ] || [ -z "$inside" ]; then restore_today_account; fi
+if [ -n "$identity_off" ] || [ -z "$inside" ] || [ -z "${OPENWIZ_AGENT_TOKEN_RUN:-}" ]; then restore_today_account; fi
 # The check reads GitHub as the OpenWiz App (GI7, #2549; the identity contract
 # `openwiz.github-identity.v1`): with the loop's OPENWIZ_GITHUB_APP_KEY secret,
 # `openwiz github token --read` mints a read-only installation token for gh

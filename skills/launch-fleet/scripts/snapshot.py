@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from datetime import datetime, timedelta, timezone
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -333,8 +335,8 @@ def write(repo, out):
         raise Stop('docs/agents/fleet.md names no record authors, so no record can be read')
     numbers = [i['number'] for i in items]
     need(len(numbers) == len(set(numbers)), 'an item was read twice: the list moved between pages; read again')
-    snap = {'repo': repo, 'read_at': read_at, 'complete': True, 'via': via, 'record_authors': authors,
-            'items': sorted(items, key=lambda i: i['number'])}
+    snap = {'repo': repo, 'read_at': read_at, 'complete': True, 'via': via, 'nonce': secrets.token_hex(8),
+            'record_authors': authors, 'items': sorted(items, key=lambda i: i['number'])}
     try:
         if via == 'rest':
             atomic(etags, json.dumps(cache) + '\n')
@@ -360,6 +362,46 @@ def load(out):
     return snap
 
 
+def body_nonce(snap, number, body):
+    seed = f"{snap.get('nonce') or ''}:{snap['repo']}:{snap['read_at']}:{number}"
+    nonce = hashlib.sha256(seed.encode()).hexdigest()[:16]
+    attempt = 0
+    while nonce in body:
+        attempt += 1
+        nonce = hashlib.sha256(f'{seed}:{attempt}'.encode()).hexdigest()[:16]
+    return nonce
+
+
+def literal_fence(text):
+    tildes = max((len(m.group(0)) for m in re.finditer(r'~+', text)), default=0)
+    ticks = max((len(m.group(0)) for m in re.finditer(r'`+', text)), default=0)
+    if tildes <= ticks:
+        return '~' * max(4, tildes + 1)
+    return '`' * max(4, ticks + 1)
+
+
+def quote_body(nonce, text):
+    fence = literal_fence(text)
+    sep = '\n' if text and not text.endswith('\n') else ''
+    return (f'### Body (untrusted)\n\n<<<untrusted-body:{nonce}>>>\n{fence}text\n'
+            f'{text}{sep}{fence}\n<<<end-untrusted-body:{nonce}>>>\n\n')
+
+
+def fit_quoted_body(nonce, text, room):
+    encoded = text.encode()
+    lo, hi = 0, len(encoded)
+    best = quote_body(nonce, '')
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = quote_body(nonce, encoded[:mid].decode(errors='ignore'))
+        if len(candidate.encode()) <= room:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best
+
+
 def facts(out, number):
     snap = load(out)
     item = next((i for i in snap['items'] if isinstance(i, dict) and i.get('number') == number), None)
@@ -377,7 +419,9 @@ def facts(out, number):
         closes = 'closing issues unavailable (read by REST)' if refs is None else f"closes {', '.join(refs) or 'none'}"
         head.append(f"head {item.get('head')}; {closes}")
     head.append('')
-    parts = ['\n'.join(head) + '\n', '### Body\n\n' + (item.get('body') or '') + '\n\n',
+    raw_body = (item.get('body') or '').replace('\r\n', '\n').replace('\r', '\n')
+    nonce = body_nonce(snap, number, raw_body)
+    parts = ['\n'.join(head) + '\n', quote_body(nonce, raw_body),
              f'### Record-author comments, newest first ({len(records)} of {len(every)} comments)\n\n']
     parts += [f"#### {c.get('author')} at {c.get('created_at')} (comment {c.get('id')}, "
               f"updated {c.get('updated_at')})\n\n{c.get('body')}\n\n" for c in records]
@@ -392,7 +436,7 @@ def facts(out, number):
             shown += k >= 3
             continue
         if k == 1:
-            text.append(part.encode()[:max(room, 0)].decode(errors='ignore') + '\n\n')
+            text.append(fit_quoted_body(nonce, raw_body, max(room, 0)))
         cut = (f'[cut: this block is capped at 60 KB; {shown} of {len(records)} record-author comments shown'
                f'{", the body cut short" if k == 1 else ""}; read GitHub for the rest]')
         break

@@ -35,7 +35,7 @@ TICKETS = 'synthetic-owner/synthetic-tickets'
 # world, so runs side by side never lose a write; FAKE_RACE=N holds each run's first read of
 # issue N's comments until two runs have made it (#1848 R2). A ticket's spec query
 # (RC3, #1831) is answered from the world's `tickets`, by number; a world without them has no spec.
-ROUTER = r'''import fcntl, json, os, subprocess, sys, time
+ROUTER = r'''import fcntl, json, os, re, subprocess, sys, time
 args = sys.argv[1:]
 named = dict(a.split('=', 1) for a in args if a.split('=', 1)[0] in ('owner', 'name'))
 repo = named['owner'] + '/' + named['name'] if len(named) == 2 else None
@@ -188,7 +188,18 @@ if args[:2] == ['api', 'graphql'] and r.returncode == 0:
         node['closingIssuesReferences'] = {'pageInfo': {'hasNextPage': False}, 'nodes': world['pr'].get('closes', [])}
         node['repository'] = {'nameWithOwner': world['repo']}
         node['id'] = 'PR_synthetic' + str(world['pr']['number'])
-        node['enqueued'] = {'nodes': [world['pr']['enqueued']] if world['pr'].get('enqueued') else []}
+        ev = world['pr'].get('enqueued')
+        if isinstance(ev, dict):
+            query = next((a.split('=', 1)[1] for a in args if a.startswith('query=')), '')
+            ev = dict(ev)
+            m = re.search(r'AddedToMergeQueueEvent\s*\{(?:[^{}]|\{[^{}]*\})*\bactor\s*\{([^}]*)\}', query)
+            if 'actor' in ev:
+                if not m:
+                    ev.pop('actor', None)
+                elif isinstance(ev['actor'], dict):
+                    asked = set(m.group(1).split())
+                    ev['actor'] = {k: v for k, v in ev['actor'].items() if k in asked}
+        node['enqueued'] = {'nodes': [ev] if ev else []}
         node['mergedBy'] = world['pr'].get('mergedBy')
         if world['pr'].get('removals'):
             node['timelineItems'] = {'nodes': [{'createdAt': r['createdAt'], 'reason': r['reason'], 'beforeCommit':
@@ -400,7 +411,11 @@ class Cost(unittest.TestCase):
                 self.assertEqual(w.writes(), [])
 
     def test_an_unavailable_cost_is_posted_unknown_never_zero(self):
+        apostrophe = ('import sys\n'
+                      'print("cost: PR #7\'s closing tickets could not be read; nothing printed", file=sys.stderr)\n'
+                      'sys.exit(1)\n')
         for script, reason in ((REFUSES, 'PR #7 closes more than one ticket'),
+                               (apostrophe, "PR #7's closing tickets could not be read"),
                                ('print("Ticket #13 cost (PR #7): builder 0 credits")\n', 'unexpected cost output'),
                                ('import sys\nprint("oops thr' + '_synx", file=sys.stderr)\nsys.exit(1)\n',
                                 'the cost command failed')):
@@ -1060,6 +1075,31 @@ class Queue(unittest.TestCase):
         project(w, PRINTS)
         self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'), (0, 'no queued merge'))
         self.assertEqual(w.writes(), [])
+
+    def test_an_app_enqueued_merge_with_null_enqueuer_still_settles_its_cost(self):
+        for name, actor in (('bot actor', {'__typename': 'Bot', 'login': 'openwiz'}),
+                            ('owner actor', {'__typename': 'User', 'login': 'synthetic-owner'})):
+            with self.subTest(allowed=name):
+                w = World(self, pr=pr(state='MERGED', mergeCommit={'oid': 'c' * 40},
+                                      enqueued={'enqueuer': None, 'actor': actor}))
+                project(w, PRINTS)
+                settle = lambda: w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project')
+                self.assertEqual(settle(), (0, 'cost posted 5001'))
+                self.assertEqual(w.bodies(12), ['launch-fleet: cost: ' + LINE])
+                self.assertEqual(settle(), (0, 'cost already posted 5001'))
+                self.assertEqual(w.bodies(7), [])
+        for name, enqueued in (
+                ('other bot actor', {'enqueuer': None, 'actor': {'__typename': 'Bot', 'login': 'other-app'}}),
+                ('user with app slug', {'enqueuer': None, 'actor': {'__typename': 'User', 'login': 'openwiz'}}),
+                ('null actor', {'enqueuer': None, 'actor': None}),
+                ('outsider enqueuer overrides bot actor',
+                 {'enqueuer': {'login': 'someone-else'}, 'actor': {'__typename': 'Bot', 'login': 'openwiz'}})):
+            with self.subTest(refused=name):
+                w = World(self, pr=pr(state='MERGED', mergeCommit={'oid': 'c' * 40}, enqueued=enqueued))
+                project(w, PRINTS)
+                self.assertEqual(w.run('merge.py', 'settle', REPO, 7, 12, cwd=w.dir / 'project'),
+                                 (0, 'no queued merge'))
+                self.assertEqual(w.writes(), [])
 
     def test_an_earlier_heads_removal_never_blocks_the_replacement_head(self):
         left = {'createdAt': '2026-01-01T00:00:00Z', 'reason': 'failed checks', 'beforeCommit': {'oid': OTHER}}

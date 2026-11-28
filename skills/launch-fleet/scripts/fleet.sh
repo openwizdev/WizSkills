@@ -150,6 +150,8 @@ LINKS=${LAUNCH_FLEET_LINKS:-$(cd "$(dirname "$0")" && pwd)/../../to-tickets/chec
 
 NOW=${LAUNCH_FLEET_NOW:-$(date -u +%s)}
 is_number "$NOW" || die "LAUNCH_FLEET_NOW must be a number of seconds"
+REST_PER_WAKE=${LAUNCH_FLEET_REST_PER_WAKE:-30}
+is_number "$REST_PER_WAKE" || die "LAUNCH_FLEET_REST_PER_WAKE must be a number of REST calls"
 
 TMP=$(mktemp -d) || die "can't make a temporary folder"
 trap 'rm -rf "$TMP"' EXIT
@@ -167,7 +169,7 @@ if [ -n "$REPLAY" ]; then
 else
   COUNTS=$TMP
   mkdir "$TMP/bin" && printf '%s\n' '#!/bin/sh' 'printf ".\n" >> "$LAUNCH_FLEET_ASKED" || exit 1' \
-    'exec "$LAUNCH_FLEET_GH" "$@"' > "$TMP/bin/gh" && chmod +x "$TMP/bin/gh" && : > "$TMP/unchanged" \
+    'exec "$LAUNCH_FLEET_GH" "$@"' > "$TMP/bin/gh" && chmod +x "$TMP/bin/gh" && : > "$TMP/unchanged" && : > "$TMP/rest" \
     && : > "$TMP/asked" && : > "$TMP/asked-revision" && : > "$TMP/rate.txt" || die "can't count the questions"
   LAUNCH_FLEET_GH=$GH LAUNCH_FLEET_ASKED=$TMP/asked PATH=$TMP/bin:$PATH
   export LAUNCH_FLEET_GH LAUNCH_FLEET_ASKED PATH
@@ -534,6 +536,7 @@ http_get() (
   set -- api --include -H "Accept: $media"
   [ -z "$etag" ] || set -- "$@" -H "If-None-Match: $etag"
   case $endpoint in search/*) ;; *) [ -n "${REST_ADMITTED:-}" ] || rest_admit 1 ;; esac
+  printf '.\n' >> "$COUNTS/rest" || exit 1
   if gh "$@" "$endpoint" > "$work/http" 2> "$work/error"; then ok=yes; else ok=no; fi
   awk '/^\r?$/ { exit } { print }' "$work/http" > "$work/headers" || exit 1
   if [ -n "$(http_status "$work/headers")" ] && grep -qi '^x-ratelimit-remaining:' "$work/headers" \
@@ -2712,7 +2715,7 @@ foreign_merges() {
 # entry holds GitHub's answers and ETags, never a token; nothing in it is
 # printed. A full read that follows a replaced probe keeps the new ETags, so
 # the next check can replay it.
-UNCHANGED_SCHEMA='launch-fleet unchanged v1'
+UNCHANGED_SCHEMA='launch-fleet unchanged v2'
 # The probe of who reads (GI7, #2549): the account (`user`), or with an App
 # installation token (LAUNCH_FLEET_GITHUB_AUTH=installation, which loop.sh
 # sets), what that installation covers, since such a token can't read `user`.
@@ -2772,7 +2775,8 @@ unchanged() {
     --arg repo "$REPO" --argjson spec "$SPEC" '
     def tag: type == "string" and test("^(W/)?\"[!#-~]{1,250}\"$");
     type == "object" and (keys == ["default", "graphql", "host", "private", "probes", "read_at",
-      "replayable", "repo", "repo_id", "schema", "self", "spec"])
+      "replayable", "repo", "repo_id", "rest", "schema", "self", "spec"])
+    and (.rest | type == "number" and . >= 0 and . == floor)
     and .schema == $schema and .self == $self and .host == $host and .repo == $repo and .spec == $spec
     and (.read_at | type == "number" and . >= 0 and . == floor) and (.replayable | type == "boolean")
     and (.private | type == "boolean") and (.default | type == "string" and length > 0)
@@ -2790,6 +2794,8 @@ unchanged() {
     && jq -r '.probes[] | "\(.endpoint) \(.etags | tojson)"' "$TMP/snap/body" > "$TMP/snap/probes" || return 0
   saved_id=$(jq -r '.repo_id' "$TMP/snap/body") && read_at=$(jq -r '.read_at' "$TMP/snap/body") \
     && replayable=$(jq -r '.replayable' "$TMP/snap/body") || return 0
+  probe_calls=$(jq '([.probes[].etags | length] | add) + .rest' "$TMP/snap/body") && is_number "$probe_calls" || return 0
+  [ "$probe_calls" -le "$REST_PER_WAKE" ] || return 0
   # Pages past the first are named by the repository's id.
   REPO_ID=$saved_id
   # Prime every saved endpoint even when this snapshot changed or expired:
@@ -2872,9 +2878,9 @@ keep_read() {
   jq -n --arg schema "$UNCHANGED_SCHEMA" --arg self "$SELF" --arg host "${GH_HOST:-github.com}" --arg repo "$REPO" \
     --argjson spec "$SPEC" --argjson at "$NOW" --argjson replayable "$replayable" --argjson private "$private" \
     --arg default "$DEFAULT" --argjson repo_id "$REPO_ID" --slurpfile graphql "$keep_out/graphql.json" \
-    --slurpfile probes "$keep_out/probes.json" \
+    --slurpfile probes "$keep_out/probes.json" --argjson rest $(($(wc -l < "$TMP/rest") - probed)) \
     '{schema: $schema, self: $self, host: $host, repo: $repo, spec: $spec, read_at: $at, replayable: $replayable,
-      private: $private, default: $default, repo_id: $repo_id, graphql: $graphql[0], probes: $probes}
+      private: $private, default: $default, repo_id: $repo_id, rest: $rest, graphql: $graphql[0], probes: $probes}
     | tojson' > "$keep_out/body.json" 2> /dev/null || return 0
   jq -j . "$keep_out/body.json" > "$keep_out/body" && digest=$(hash < "$keep_out/body") || return 0
   pending=$(mktemp "$CACHE/.unchanged.XXXXXX" 2> /dev/null) || return 0
@@ -2893,6 +2899,7 @@ if [ "$cmd" = wake ] || { [ "$cmd" = claim ] && [ -z "${CLAIM_REPO:-}" ]; }; the
   fi
 elif [ "$cmd" = spec ]; then
   [ -n "$REPLAY" ] || unchanged
+  probed=$(wc -l < "$COUNTS/rest") || die "can't count the REST reads"
   specs_list
   settings
   awk -v s="$SPEC" '$1 == s' "$TMP/spec-list.sorted" > "$TMP/spec-list.one" \

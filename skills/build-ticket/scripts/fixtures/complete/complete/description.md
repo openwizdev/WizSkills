@@ -6,7 +6,7 @@ A synthetic adder.
 
 ## Evidence
 
-Before: `python3 -I test_adder.py` on the base printed `FAILED (failures=2)`.
+Before: `python3 -m unittest test_adder` on the base printed `FAILED (failures=2)`.
 
 After: the same command printed `OK`. Criterion 1: `test_sum` passed.
 
@@ -14,7 +14,7 @@ After: the same command printed `OK`. Criterion 1: `test_sum` passed.
 
 ## Self-check
 
-- criterion 3: `python3 -I test_all.py` printed OK (9 tests)
+- criterion 3: `python3 -m unittest discover` printed OK (9 tests)
 
 ## Merge danger
 

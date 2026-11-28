@@ -2,7 +2,7 @@ Closes #101
 
 ## Evidence
 
-Before: `python3 -I test_adder.py` printed:
+Before: `python3 -m unittest test_adder` printed:
 
 ```
 ## Summary

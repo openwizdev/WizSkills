@@ -6,7 +6,7 @@ The adder returns the sum of two numbers. Criterion 2 and criterion 3 are met. B
 
 ## Evidence
 
-After: `python3 -I test_adder.py` printed `OK`.
+After: `python3 -m unittest test_adder` printed `OK`.
 
 ## Merge danger
 
